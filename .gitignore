@@ -1,7 +1,26 @@
+# Build output
 bin/
+
+# Capture files
 *.pcap
+captures/
+
+# Profiling
 *.prof
+
+# Test artifacts
 *.test
 *.out
+coverage.html
+
+# Dependencies
 vendor/
+
+# Environment
 .env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
