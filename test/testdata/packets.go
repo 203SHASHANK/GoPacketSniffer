@@ -1,0 +1,93 @@
+// Package testdata provides raw packet byte slices for use in unit tests.
+package testdata
+
+// TCPSynPacket is a complete Ethernet/IPv4/TCP SYN frame.
+//
+//	Ethernet: 00:11:22:33:44:55 → ff:ff:ff:ff:ff:ff  EtherType=0x0800
+//	IPv4:     192.168.1.100 → 8.8.8.8  Proto=TCP  TTL=64
+//	TCP:      50000 → 80  Flags=SYN
+var TCPSynPacket = []byte{
+	// Ethernet header (14 bytes)
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Dst MAC
+	0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // Src MAC
+	0x08, 0x00, // EtherType: IPv4
+
+	// IPv4 header (20 bytes)
+	0x45,       // Version=4, IHL=5 (20 bytes)
+	0x00,       // DSCP/ECN
+	0x00, 0x3c, // Total Length = 60
+	0x1c, 0x46, // Identification
+	0x40, 0x00, // Flags=DF, Fragment Offset=0
+	0x40,       // TTL = 64
+	0x06,       // Protocol = TCP (6)
+	0xb1, 0xe6, // Header Checksum
+	0xc0, 0xa8, 0x01, 0x64, // Src IP: 192.168.1.100
+	0x08, 0x08, 0x08, 0x08, // Dst IP: 8.8.8.8
+
+	// TCP header (20 bytes)
+	0xc3, 0x50, // Src Port: 50000
+	0x00, 0x50, // Dst Port: 80
+	0x00, 0x00, 0x00, 0x00, // Sequence Number: 0
+	0x00, 0x00, 0x00, 0x00, // Acknowledgment Number: 0
+	0x50,       // Data Offset=5 (20 bytes), Reserved=0
+	0x02,       // Flags: SYN
+	0x20, 0x00, // Window Size: 8192
+	0xe6, 0x32, // Checksum
+	0x00, 0x00, // Urgent Pointer
+}
+
+// UDPDNSPacket is a minimal Ethernet/IPv4/UDP DNS query frame.
+//
+//	Ethernet: 00:11:22:33:44:55 → ff:ff:ff:ff:ff:ff  EtherType=0x0800
+//	IPv4:     192.168.1.100 → 8.8.8.8  Proto=UDP  TTL=64
+//	UDP:      12345 → 53
+var UDPDNSPacket = []byte{
+	// Ethernet header (14 bytes)
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+	0x08, 0x00,
+
+	// IPv4 header (20 bytes)
+	0x45, 0x00,
+	0x00, 0x1d, // Total Length = 29 (20 IP + 8 UDP + 1 data)
+	0x00, 0x01,
+	0x00, 0x00,
+	0x40,       // TTL=64
+	0x11,       // Protocol=UDP (17)
+	0x00, 0x00, // Checksum (not validated in tests)
+	0xc0, 0xa8, 0x01, 0x64, // Src: 192.168.1.100
+	0x08, 0x08, 0x08, 0x08, // Dst: 8.8.8.8
+
+	// UDP header (8 bytes)
+	0x30, 0x39, // Src Port: 12345
+	0x00, 0x35, // Dst Port: 53
+	0x00, 0x09, // Length: 9 (8 header + 1 data)
+	0x00, 0x00, // Checksum
+	0xAA,       // 1 byte of dummy payload
+}
+
+// ICMPEchoPacket is a minimal Ethernet/IPv4/ICMP echo request frame.
+var ICMPEchoPacket = []byte{
+	// Ethernet header (14 bytes)
+	0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+	0x08, 0x00,
+
+	// IPv4 header (20 bytes)
+	0x45, 0x00,
+	0x00, 0x1c, // Total Length = 28 (20 IP + 8 ICMP)
+	0x00, 0x01,
+	0x00, 0x00,
+	0x40,       // TTL=64
+	0x01,       // Protocol=ICMP (1)
+	0x00, 0x00,
+	0xc0, 0xa8, 0x01, 0x64,
+	0x08, 0x08, 0x08, 0x08,
+
+	// ICMP header (8 bytes)
+	0x08,       // Type: Echo Request
+	0x00,       // Code: 0
+	0x00, 0x00, // Checksum
+	0x00, 0x01, // Identifier
+	0x00, 0x01, // Sequence Number
+}

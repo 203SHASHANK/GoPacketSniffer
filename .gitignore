@@ -1,0 +1,7 @@
+bin/
+*.pcap
+*.prof
+*.test
+*.out
+vendor/
+.env
