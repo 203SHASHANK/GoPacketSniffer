@@ -16,7 +16,7 @@ func TestPacketPoolRoundTrip(t *testing.T) {
 		t.Errorf("Protocol=%s, want TCP", info.Protocol)
 	}
 
-	// Return to pool and get a fresh one — should be zeroed.
+	// Return it to the pool; whatever comes out next must be zeroed.
 	PutPacketInfo(info)
 	fresh := GetPacketInfo()
 	if fresh.Protocol != "" {

@@ -7,10 +7,10 @@ import (
 
 // ICMP type constants (RFC 792).
 const (
-	ICMPTypeEchoReply      = 0
+	ICMPTypeEchoReply       = 0
 	ICMPTypeDestUnreachable = 3
-	ICMPTypeEchoRequest    = 8
-	ICMPTypeTimeExceeded   = 11
+	ICMPTypeEchoRequest     = 8
+	ICMPTypeTimeExceeded    = 11
 
 	ICMPHeaderSize = 8
 )

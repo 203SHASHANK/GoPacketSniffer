@@ -15,7 +15,7 @@ services:
       - ./captures:/captures    # mount for -w pcap output
     restart: unless-stopped
 
-  # Optional traffic generator — useful for local testing.
+  # Optional traffic generator, useful for local testing.
   # Run: docker-compose --profile test up
   traffic-gen:
     image: alpine:3.20

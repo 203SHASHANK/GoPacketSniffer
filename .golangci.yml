@@ -3,22 +3,23 @@ version: "2"
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
     - misspell
     - unconvert
     - unparam
+  settings:
+    errcheck:
+      check-type-assertions: true
+  exclusions:
+    rules:
+      # Tests may ignore errors from cleanup calls.
+      - path: _test\.go
+        linters:
+          - errcheck
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-
-issues:
-  exclude-rules:
-    # Test files are allowed to ignore errors in defer/cleanup
-    - path: "_test\\.go"
-      linters: [errcheck]
+formatters:
+  enable:
+    - gofmt

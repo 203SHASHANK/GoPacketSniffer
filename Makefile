@@ -3,7 +3,7 @@ CMD     := ./cmd/gopacketsniffer
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -ldflags="-w -s -X main.version=$(VERSION)"
 
-.PHONY: build run test bench cover lint docker clean release
+.PHONY: build run test bench cover lint docker docker-run clean release
 
 build:
 	@mkdir -p bin
@@ -32,12 +32,13 @@ lint:
 	golangci-lint run ./...
 
 docker:
-	docker build -t gopacketsniffer:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t gopacketsniffer:$(VERSION) .
 
+# Without IFACE the image's default command (-i eth0) is used.
 docker-run:
 	docker run --rm --network host \
 		--cap-add=NET_RAW --cap-add=NET_ADMIN \
-		gopacketsniffer:$(VERSION) $(ARGS)
+		gopacketsniffer:$(VERSION) $(if $(IFACE),-i $(IFACE)) $(ARGS)
 
 clean:
 	rm -rf bin/ *.pcap *.prof coverage.out coverage.html
