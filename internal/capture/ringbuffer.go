@@ -1,56 +1,71 @@
 package capture
 
 import (
+	"math/bits"
 	"sync/atomic"
 )
 
-// RingBuffer is a lock-free, single-producer / single-consumer circular buffer
-// for passing raw packet bytes from the capture goroutine to parse workers.
+// RingBuffer is a lock-free, single-producer / single-consumer circular
+// buffer for passing raw packet bytes between two goroutines.
 //
-// Size must be a power of two so the modulo can be replaced with a bitmask.
+// It is safe only when exactly one goroutine calls Enqueue and exactly one
+// goroutine calls Dequeue. The capture pipeline in main currently uses a
+// buffered channel instead; the ring buffer is kept as a faster alternative
+// for that hand-off.
 type RingBuffer struct {
 	slots [][]byte
-	mask  uint64
-	write atomic.Uint64 // next write index
-	read  atomic.Uint64 // next read index
+	mask  uint64        // len(slots) - 1, used to wrap indices
+	write atomic.Uint64 // total number of packets ever enqueued
+	read  atomic.Uint64 // total number of packets ever dequeued
 }
 
-// NewRingBuffer creates a RingBuffer with the given capacity.
-// capacity must be a power of two (e.g. 1024, 65536, 1<<20).
+// NewRingBuffer creates a RingBuffer that holds at least capacity packets.
+//
+// The capacity is rounded up to the next power of two so that an index can
+// be wrapped with a bitmask instead of a modulo.
 func NewRingBuffer(capacity uint64) *RingBuffer {
+	if capacity < 2 {
+		capacity = 2
+	}
+	if capacity&(capacity-1) != 0 {
+		capacity = 1 << bits.Len64(capacity)
+	}
 	return &RingBuffer{
 		slots: make([][]byte, capacity),
 		mask:  capacity - 1,
 	}
 }
 
-// Enqueue adds a packet to the buffer. Returns false if the buffer is full
-// (packet is dropped — caller should increment a drop counter).
+// Enqueue adds a packet to the buffer. It returns false, without storing the
+// packet, when the buffer is full.
 func (rb *RingBuffer) Enqueue(packet []byte) bool {
 	writeIdx := rb.write.Load()
 	readIdx := rb.read.Load()
 
-	// Buffer is full when write is exactly one lap ahead of read.
+	// The indices only ever grow, so their difference is the fill level.
 	if writeIdx-readIdx > rb.mask {
 		return false
 	}
 
+	// Store the packet before publishing the new write index, so the
+	// consumer never observes an index whose slot is not yet filled.
 	rb.slots[writeIdx&rb.mask] = packet
 	rb.write.Add(1)
 	return true
 }
 
-// Dequeue removes and returns the next packet. Returns nil, false if empty.
+// Dequeue removes and returns the oldest packet. It returns nil, false when
+// the buffer is empty.
 func (rb *RingBuffer) Dequeue() ([]byte, bool) {
 	readIdx := rb.read.Load()
 	writeIdx := rb.write.Load()
 
 	if readIdx == writeIdx {
-		return nil, false // empty
+		return nil, false
 	}
 
 	packet := rb.slots[readIdx&rb.mask]
-	rb.slots[readIdx&rb.mask] = nil // release reference for GC
+	rb.slots[readIdx&rb.mask] = nil // drop the reference so the GC can free it
 	rb.read.Add(1)
 	return packet, true
 }
@@ -58,4 +73,9 @@ func (rb *RingBuffer) Dequeue() ([]byte, bool) {
 // Len returns the number of packets currently in the buffer.
 func (rb *RingBuffer) Len() uint64 {
 	return rb.write.Load() - rb.read.Load()
+}
+
+// Cap returns the number of packets the buffer can hold.
+func (rb *RingBuffer) Cap() uint64 {
+	return rb.mask + 1
 }

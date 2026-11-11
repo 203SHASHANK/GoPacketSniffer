@@ -1,4 +1,4 @@
-# GoPacketSniffer — Command Reference
+# GoPacketSniffer - Command Reference
 
 A complete guide to every command you'll use while building, running, and
 testing GoPacketSniffer. Each section explains what the command does and
@@ -68,7 +68,7 @@ Use when you are plugged into a network cable.
 ```bash
 make run IFACE=wlp0s20f3 ARGS='-v'
 ```
-Verbose mode — prints one decoded line per packet instead of the dashboard.
+Verbose mode - prints one decoded line per packet instead of the dashboard.
 **Use this when you want to see individual packets scroll by in real time.**
 
 ```bash
@@ -94,6 +94,11 @@ make run IFACE=wlp0s20f3 ARGS='-f "icmp"'
 Capture only ICMP packets (ping traffic).
 
 ```bash
+make run IFACE=wlp0s20f3 ARGS='-f "host 192.168.1.10"'
+```
+Capture only IPv4 packets to or from one address.
+
+```bash
 make run IFACE=wlp0s20f3 ARGS='-w capture.pcap'
 ```
 Saves every captured packet to `capture.pcap` in Wireshark format.
@@ -102,7 +107,7 @@ Saves every captured packet to `capture.pcap` in Wireshark format.
 ```bash
 make run IFACE=wlp0s20f3 ARGS='-f "tcp port 443" -w https.pcap -v'
 ```
-Combines filter + save + verbose — all three flags at once.
+Combines filter + save + verbose - all three flags at once.
 
 ### Running directly with sudo (without make)
 
@@ -112,6 +117,12 @@ sudo ./bin/gopacketsniffer -i wlp0s20f3 -v
 sudo ./bin/gopacketsniffer -i wlp0s20f3 -f "tcp port 80"
 sudo ./bin/gopacketsniffer -i wlp0s20f3 -w capture.pcap
 ```
+
+```bash
+./bin/gopacketsniffer -version
+```
+Prints the version baked in at build time (the `git describe` output when
+built with `make build`). Does not need root.
 
 ### Grant capabilities so you don't need sudo every time
 
@@ -231,7 +242,7 @@ Runs `golangci-lint` with the project's `.golangci.yml` config.
 Checks for errcheck, staticcheck, unused variables, misspellings, and more.
 Requires golangci-lint to be installed:
 ```bash
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 ```
 
 ---

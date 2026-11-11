@@ -14,8 +14,8 @@ own goroutine and communicates via channels or shared, mutex-protected state.
 │  AF_PACKET  ──►  CaptureLoop  ──►  parseWorker  ──►  ticker    │
 │  + BPF filter    goroutine        goroutine         goroutine   │
 │                      │                │                │        │
-│                  packetChan       Statistics       terminal     │
-│                  (chan []byte)     (mutex)          (stdout)    │
+│                  frames chan      Statistics       terminal     │
+│                  (chan Frame)      (mutex)          (stdout)    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -26,28 +26,42 @@ own goroutine and communicates via channels or shared, mutex-protected state.
 ### 1. Capture Layer (`internal/capture/`)
 
 **capture.go**
-- Opens an `AF_PACKET / SOCK_RAW` socket — gives access to raw Ethernet frames
+- Opens an `AF_PACKET / SOCK_RAW` socket - gives access to raw Ethernet frames
   before the kernel's network stack processes them.
 - Binds to a specific interface via `SockaddrLinklayer`.
 - Enables promiscuous mode via `PACKET_MR_PROMISC` so the NIC passes all
   frames, not just those addressed to this host.
-- `CaptureLoop` calls `Recvfrom` in a tight loop, copies each frame into a
-  fresh `[]byte`, and sends it to `packetChan`. The copy is necessary because
-  the kernel reuses the read buffer.
+- On loopback, sets `PACKET_IGNORE_OUTGOING` so each packet is seen once
+  instead of twice (outgoing and incoming copy).
+- `CaptureLoop` calls `Recvfrom` in a loop, timestamps each frame, copies it
+  into a fresh `[]byte`, and sends it to the frames channel as a
+  `Frame{Data, Timestamp}`. The copy is necessary because the read buffer is
+  reused for the next frame.
+- The send is non-blocking. If the parser falls behind and the channel is
+  full, the frame is discarded and counted as dropped.
+- The socket has a 200 ms receive timeout (`SO_RCVTIMEO`), so the loop can
+  notice a shutdown request even on an idle interface. Closing the fd from
+  another goroutine does not reliably wake a blocked `recvfrom`.
 
 **ringbuffer.go**
 - Lock-free single-producer / single-consumer circular buffer using
   `atomic.Uint64` read/write pointers.
-- Size is always a power of two so index wrapping is a bitmask (`& mask`)
-  instead of a modulo — avoids division on every operation.
-- Used internally; the main pipeline uses a buffered channel for simplicity,
-  but the ring buffer is available for zero-copy extensions.
+- Capacity is rounded up to a power of two so index wrapping is a bitmask
+  (`& mask`) instead of a modulo, which avoids a division on every operation.
+- Not wired into the main pipeline, which uses a buffered channel for its
+  simpler shutdown semantics. The ring buffer is a drop-in alternative for
+  that hand-off.
 
 **bpf.go**
 - Compiles a filter expression into BPF bytecode using `golang.org/x/net/bpf`.
+  A small builder records jumps with symbolic targets (next / accept /
+  reject) and resolves the relative skip counts at the end.
+- Every filter first checks that the EtherType is IPv4. Port filters reject
+  non-first IP fragments and locate the ports through the IP header length
+  (`ldxb 4*([14]&0xf)`), so packets with IP options are matched correctly.
 - Attaches the program to the socket via `SO_ATTACH_FILTER` (setsockopt).
 - The kernel evaluates the BPF program for every incoming frame and drops
-  non-matching packets before they reach userspace — this is the most
+  non-matching packets before they reach userspace - this is the most
   efficient filtering point possible.
 
 ### 2. Parser Layer (`internal/parser/`)
@@ -70,7 +84,14 @@ raw []byte
 populated with all extracted fields. It uses a `sync.Pool` to reuse
 `PacketInfo` allocations, reducing GC pressure in the hot path.
 
-**Protocol offsets (all relative to start of Ethernet frame):**
+Two details matter for correctness on real traffic:
+- `ParseIPv4` uses the Total Length field to cut off Ethernet padding
+  (frames are padded to 60 bytes), so padding is never mistaken for payload.
+- Non-first IP fragments carry no transport header. The decoder labels them
+  with their protocol, sets `IsFragment`, and does not parse ports or flags.
+
+**Protocol offsets (relative to start of Ethernet frame, for an IP header
+without options):**
 
 | Field | Offset | Size |
 |---|---|---|
@@ -88,31 +109,42 @@ populated with all extracted fields. It uses a `sync.Pool` to reuse
 ### 3. Statistics Engine (`internal/stats/`)
 
 **stats.go**
-- Single `sync.Mutex` protects all counters — chosen over atomics because
+- Single `sync.Mutex` protects all counters - chosen over atomics because
   the critical section is short and the lock is only contended between the
   parse worker and the display ticker (two goroutines).
 - `GetSnapshot()` returns a deep copy of all state so the display goroutine
   can read without holding the lock.
 - Bandwidth is computed per-interval: bytes accumulated since the last
-  `GetSnapshot()` call divided by elapsed seconds.
+  `GetSnapshot()` call, times 8, divided by elapsed seconds (bits per second).
 
 **toptalkers.go**
 - `map[string]uint64` (IP → bytes) updated on every packet.
-- Sorted on each `GetSnapshot()` call — acceptable because the display
-  refreshes at 1 Hz, not in the hot path.
+- Sorted on each `GetSnapshot()` call, which is acceptable because the display
+  refreshes at 1 Hz, not in the hot path. Ties are broken by address so the
+  ranking does not flicker.
+- The map is capped at 65,536 addresses. When full, the lighter half is
+  discarded, so a scan with random source addresses cannot exhaust memory.
 
 **flows.go**
 - `map[FiveTuple]*FlowStats` tracks TCP connections.
 - 5-tuple is normalised (lower IP/port first) so forward and reverse
   directions map to the same entry.
-- State machine: `SYN_SENT → ESTABLISHED → CLOSING → CLOSED`.
-  Flows in `CLOSED` state are deleted immediately to bound memory.
+- State machine: `SYN_SENT → ESTABLISHED → CLOSING → CLOSED`. A flow first
+  seen mid-stream (no SYN) starts as `ESTABLISHED`. `CLOSED` is reached on
+  RST, or on the ACK that follows a FIN from each side.
+- Closed flows are kept for 10 seconds, uncounted, so trailing ACKs and
+  retransmissions are not mistaken for new connections.
+- Idle flows are expired on every snapshot (5 minutes for established, 30
+  seconds for half-open or closing), which bounds the size of the map.
 
 ### 4. Display Layer (`internal/display/`)
 
 - Runs on a 1-second ticker.
-- Calls `ClearScreen()` (ANSI `\033[H\033[2J`) then redraws the full
-  dashboard — creates the "live update" effect without a TUI library.
+- Emits the clear-screen sequence (ANSI `\033[H\033[2J`) and redraws the full
+  dashboard, which gives a live-updating view without a TUI library. Each
+  frame is built in memory and written with one call to avoid flicker.
+- Rows are padded by visible width (escape sequences excluded), so the
+  right-hand border stays aligned regardless of colors.
 - All formatting helpers (`formatBytes`, `formatBPS`, `progressBar`) are
   pure functions, making them unit-testable without a real terminal.
 
@@ -121,7 +153,7 @@ populated with all extracted fields. It uses a `sync.Pool` to reuse
 - Writes the 24-byte libpcap global header on creation, then appends
   16-byte per-packet records followed by raw frame data.
 - Uses a 1 MB `bufio.Writer` to batch small writes into larger I/O
-  operations — critical at high packet rates.
+  operations - critical at high packet rates.
 - Format is little-endian with magic `0xA1B2C3D4`, compatible with
   Wireshark, tcpdump, and any libpcap-based tool.
 
@@ -132,16 +164,17 @@ populated with all extracted fields. It uses a `sync.Pool` to reuse
 ```
 main goroutine
   ├── signal handler (blocks on sigCh)
-  ├── captureWorker  (blocked on Recvfrom)
-  ├── parseWorker    (blocked on packetChan)
+  ├── captureWorker  (blocked on Recvfrom, 200 ms timeout)
+  ├── parseWorker    (blocked on the frames channel)
   └── displayWorker  (blocked on ticker.C)
 
 Shutdown sequence:
-  1. Signal received → close(done)
-  2. captureWorker exits Recvfrom loop, closes packetChan
-  3. parseWorker drains packetChan, exits range loop
+  1. Signal received (or the capture loop fails) → close(done)
+  2. captureWorker sees done within one receive timeout, closes the channel
+  3. parseWorker drains the channel, exits its range loop
   4. displayWorker sees <-done, returns
-  5. wg.Wait() unblocks, pcapWriter.Close() called
+  5. wg.Wait() unblocks, pcapWriter.Close() flushes the file
+  6. The socket is closed last, once nothing is reading from it
 ```
 
 ---

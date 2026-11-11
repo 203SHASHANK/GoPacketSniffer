@@ -11,12 +11,12 @@ import (
 
 func TestParseEthernet(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     []byte
-		wantSrc   string
-		wantDst   string
-		wantType  uint16
-		wantErr   bool
+		name     string
+		input    []byte
+		wantSrc  string
+		wantDst  string
+		wantType uint16
+		wantErr  bool
 	}{
 		{
 			name:     "valid TCP SYN frame",
@@ -60,12 +60,12 @@ func TestParseIPv4(t *testing.T) {
 	ipPayload := testdata.TCPSynPacket[EthernetHeaderSize:]
 
 	tests := []struct {
-		name     string
-		input    []byte
-		wantSrc  string
-		wantDst  string
+		name      string
+		input     []byte
+		wantSrc   string
+		wantDst   string
 		wantProto uint8
-		wantErr  bool
+		wantErr   bool
 	}{
 		{
 			name:      "valid IPv4 TCP",
@@ -353,5 +353,100 @@ func BenchmarkDecodePacket(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		DecodePacket(testdata.TCPSynPacket, now)
+	}
+}
+
+// --- Decoder edge cases ---
+
+func TestDecodePacketICMPType(t *testing.T) {
+	info, err := DecodePacket(testdata.ICMPEchoPacket, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer PutPacketInfo(info)
+	if info.ICMPType != "EchoRequest" {
+		t.Errorf("ICMPType=%q, want EchoRequest", info.ICMPType)
+	}
+	if info.TCPFlags != "" {
+		t.Errorf("TCPFlags=%q, want empty for ICMP", info.TCPFlags)
+	}
+}
+
+func TestDecodePacketNonIPv4(t *testing.T) {
+	arp := make([]byte, 42)
+	arp[12], arp[13] = 0x08, 0x06 // EtherType ARP
+
+	info, err := DecodePacket(arp, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer PutPacketInfo(info)
+	if info.Protocol != "Other" {
+		t.Errorf("Protocol=%q, want Other", info.Protocol)
+	}
+	if info.SrcIP != "" {
+		t.Errorf("SrcIP=%q, want empty", info.SrcIP)
+	}
+}
+
+func TestDecodePacketTruncated(t *testing.T) {
+	// Cut the frame in the middle of the TCP header.
+	short := testdata.TCPSynPacket[:EthernetHeaderSize+IPv4MinHeaderSize+10]
+	if _, err := DecodePacket(short, time.Now()); err == nil {
+		t.Error("expected an error for a truncated TCP header")
+	}
+}
+
+func TestParseIPv4TrimsEthernetPadding(t *testing.T) {
+	// The UDP fixture declares Total Length 29. Append padding, as a NIC
+	// does to reach the 60-byte Ethernet minimum.
+	ipBytes := append([]byte(nil), testdata.UDPDNSPacket[EthernetHeaderSize:]...)
+	ipBytes = append(ipBytes, make([]byte, 17)...)
+
+	ip, err := ParseIPv4(ipBytes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := 29 - IPv4MinHeaderSize; len(ip.Payload) != want {
+		t.Errorf("payload length=%d, want %d (padding not removed)", len(ip.Payload), want)
+	}
+}
+
+func TestParseIPv4IgnoresBogusTotalLength(t *testing.T) {
+	// Segmentation offload can leave Total Length at 0; the payload must
+	// then fall back to everything after the header.
+	ipBytes := append([]byte(nil), testdata.TCPSynPacket[EthernetHeaderSize:]...)
+	ipBytes[2], ipBytes[3] = 0, 0
+
+	ip, err := ParseIPv4(ipBytes)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := len(ipBytes) - IPv4MinHeaderSize; len(ip.Payload) != want {
+		t.Errorf("payload length=%d, want %d", len(ip.Payload), want)
+	}
+}
+
+func TestDecodePacketLaterFragment(t *testing.T) {
+	// Turn the TCP fixture into a non-first fragment (offset 185). Its
+	// "TCP header" bytes are now payload and must not be decoded.
+	frame := append([]byte(nil), testdata.TCPSynPacket...)
+	frame[EthernetHeaderSize+6] = 0x00
+	frame[EthernetHeaderSize+7] = 0xb9
+
+	info, err := DecodePacket(frame, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer PutPacketInfo(info)
+	if !info.IsFragment {
+		t.Error("IsFragment=false, want true")
+	}
+	if info.Protocol != "TCP" {
+		t.Errorf("Protocol=%q, want TCP", info.Protocol)
+	}
+	if info.SrcPort != 0 || info.DstPort != 0 || info.TCPFlags != "" {
+		t.Errorf("transport fields decoded from a fragment: %d -> %d %s",
+			info.SrcPort, info.DstPort, info.TCPFlags)
 	}
 }

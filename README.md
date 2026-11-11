@@ -1,9 +1,9 @@
 # GoPacketSniffer
 
-> High-performance network packet analyzer built from scratch in Go — no libpcap dependency.
+> High-performance network packet analyzer built from scratch in Go - no libpcap dependency.
 
-[![CI](https://github.com/yourusername/GoPacketSniffer/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/GoPacketSniffer/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/GoPacketSniffer)](https://goreportcard.com/report/github.com/yourusername/GoPacketSniffer)
+[![CI](https://github.com/203SHASHANK/GoPacketSniffer/actions/workflows/ci.yml/badge.svg)](https://github.com/203SHASHANK/GoPacketSniffer/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/203SHASHANK/GoPacketSniffer)](https://goreportcard.com/report/github.com/203SHASHANK/GoPacketSniffer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -13,13 +13,13 @@
 GoPacketSniffer captures live network traffic from any Linux network interface
 using raw `AF_PACKET` sockets, decodes packets layer-by-layer
 (Ethernet → IPv4 → TCP/UDP/ICMP → HTTP), and displays real-time statistics
-in a colorized terminal dashboard — all without external C libraries.
+in a colorized terminal dashboard - all without external C libraries.
 
-Built as a systems programming showcase demonstrating:
+It is a systems programming project covering:
 - Raw socket programming and kernel interaction
-- RFC-compliant binary protocol parsing
-- Lock-free concurrent data structures
-- 1+ Gbps throughput with `sync.Pool` and ring buffers
+- Binary protocol parsing straight from the RFC header layouts
+- A concurrent capture pipeline with clean shutdown
+- Allocation reduction with `sync.Pool`, plus a lock-free SPSC ring buffer
 
 ---
 
@@ -29,11 +29,11 @@ Built as a systems programming showcase demonstrating:
 |---|---|
 | Protocol support | Ethernet, IPv4, TCP, UDP, ICMP, HTTP/1.x |
 | Live dashboard | Protocol distribution, bandwidth, top talkers, TCP flows |
-| BPF filtering | Kernel-level pre-filter (`tcp`, `udp`, `icmp`, `tcp port N`, `udp port N`) |
+| BPF filtering | Kernel-level pre-filter (`tcp`, `udp`, `icmp`, `tcp port N`, `udp port N`, `host A.B.C.D`) |
 | PCAP export | Wireshark-compatible `.pcap` files |
 | Verbose mode | Per-packet decoded output with timestamps |
 | Docker | Single-command containerized deployment |
-| Zero C deps | Pure Go — no libpcap, no cgo |
+| Zero C deps | Pure Go - no libpcap, no cgo |
 
 ---
 
@@ -41,14 +41,14 @@ Built as a systems programming showcase demonstrating:
 
 ### Prerequisites
 
-- Go 1.21+
+- Go 1.25+
 - Linux (Ubuntu 20.04+ recommended)
 - Root privileges or `CAP_NET_RAW` + `CAP_NET_ADMIN`
 
 ### Build & Run
 
 ```bash
-git clone https://github.com/yourusername/GoPacketSniffer
+git clone https://github.com/203SHASHANK/GoPacketSniffer
 cd GoPacketSniffer
 make build
 
@@ -58,7 +58,7 @@ sudo ./bin/gopacketsniffer -i eth0
 # Verbose per-packet output
 sudo ./bin/gopacketsniffer -i eth0 -v
 
-# BPF filter — only HTTP traffic
+# BPF filter - only HTTP traffic
 sudo ./bin/gopacketsniffer -i eth0 -f "tcp port 80"
 
 # Save to PCAP file
@@ -86,9 +86,10 @@ Usage: gopacketsniffer -i <interface> [options]
 
 Flags:
   -i  string   Network interface to capture on (required)
-  -v           Verbose: print each decoded packet
-  -f  string   BPF filter expression (e.g. "tcp port 443")
-  -w  string   Write packets to a .pcap file
+  -v           Verbose: print each decoded packet instead of the dashboard
+  -f  string   Capture filter (e.g. "tcp port 443")
+  -w  string   Also write packets to a .pcap file
+  -version     Print the version and exit
 ```
 
 ### Filter Expressions
@@ -100,6 +101,12 @@ Flags:
 | `icmp` | ICMP packets only |
 | `tcp port 80` | TCP on port 80 (src or dst) |
 | `udp port 53` | UDP on port 53 (DNS) |
+| `host 10.0.0.1` | IPv4 packets to or from that address |
+
+Filters are compiled to classic BPF and run in the kernel. They match IPv4
+only, read the ports at the offset given by the IP header length, and skip
+non-first IP fragments for port filters. Anything else is rejected with an
+error rather than silently capturing everything.
 
 ---
 
@@ -107,29 +114,41 @@ Flags:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────┐
-│  GoPacketSniffer v1.0.0              Live Network Traffic Analysis             │
+│  GoPacketSniffer v1.0.0                         Live Network Traffic Analysis  │
 ├────────────────────────────────────────────────────────────────────────────────┤
-│  Interface: eth0       Uptime: 00:02:15                                        │
-│  Captured:    45234 packets │   23.5 MB   Dropped: 0 (0.0%)                   │
+│  Interface: eth0             Uptime: 00:02:15                                  │
+│  Captured: 45234 packets | 23.5 MB    Dropped: 12 (0.0%)                       │
 ├────────────────────────────────────────────────────────────────────────────────┤
 │  PROTOCOL DISTRIBUTION                                                         │
-│  TCP     32156 pkts ( 71.0%) │   18.2 MB  ██████████████░░░░░░  │
-│  UDP      8945 pkts ( 19.8%) │    3.8 MB  ████░░░░░░░░░░░░░░░░  │
-│  ICMP     4133 pkts (  9.1%) │    1.5 MB  ██░░░░░░░░░░░░░░░░░░  │
+│  TCP       32156 pkts ( 71.1%) |   18.2 MB  ██████████████░░░░░░               │
+│  UDP        8945 pkts ( 19.8%) |    3.8 MB  ███░░░░░░░░░░░░░░░░░               │
+│  ICMP       3133 pkts (  6.9%) |    1.0 MB  █░░░░░░░░░░░░░░░░░░░               │
+│  Other      1000 pkts (  2.2%) |  512.0 KB  ░░░░░░░░░░░░░░░░░░░░               │
 ├────────────────────────────────────────────────────────────────────────────────┤
 │  BANDWIDTH                                                                     │
-│  Current: 2.3 Mbps        Peak: 5.1 Mbps @ 14:23:15                           │
+│  Current: 2.3 Mbps    Peak: 5.1 Mbps @ 14:23:15                                │
 ├────────────────────────────────────────────────────────────────────────────────┤
 │  TOP TALKERS (by bytes sent)                                                   │
-│   1. 192.168.1.100           12.5 MB  (21.4%)                                 │
-│   2. 172.217.164.46           8.3 MB  (14.2%)                                 │
+│   1. 192.168.1.100      12.5 MB  ( 53.2%)                                      │
+│   2. 172.217.164.46      8.3 MB  ( 35.3%)                                      │
 ├────────────────────────────────────────────────────────────────────────────────┤
 │  HTTP TRAFFIC                                                                  │
-│  Requests: 234  │  2xx: 180  4xx: 45  5xx: 9                                  │
+│  Requests: 234  |  Responses  2xx: 180  4xx: 45  5xx: 9                        │
 ├────────────────────────────────────────────────────────────────────────────────┤
-│  Active TCP Flows: 42                                                          │
+│  Active TCP flows: 42                                                          │
 └────────────────────────────────────────────────────────────────────────────────┘
   [Ctrl+C to stop]
+```
+
+Verbose mode (`-v`) prints one line per packet instead:
+
+```
+19:05:41.998617 TCP   10.0.0.5:41488 -> 93.184.216.34:80 [SYN]
+19:05:41.998688 TCP   93.184.216.34:80 -> 10.0.0.5:41488 [SYN,ACK]
+19:05:41.998735 TCP   10.0.0.5:41488 -> 93.184.216.34:80 [ACK,PSH] HTTP GET example.com/
+19:05:42.002009 TCP   93.184.216.34:80 -> 10.0.0.5:41488 [ACK,PSH] HTTP 200 OK
+19:05:42.120344 UDP   10.0.0.5:53124 -> 8.8.8.8:53
+19:05:42.300112 ICMP  10.0.0.5 -> 8.8.8.8 (EchoRequest)
 ```
 
 ---
@@ -144,9 +163,9 @@ AF_PACKET socket  ←── BPF filter (kernel, pre-userspace)
      │
      ▼
 CaptureLoop goroutine
-     │  []byte frames
+     │  Frame{Data, Timestamp}
      ▼
-packetChan (buffered, 4096)
+frames channel (buffered, 4096; overflow is counted as dropped)
      │
      ▼
 Parse worker goroutine
@@ -158,10 +177,10 @@ Parse worker goroutine
      ▼
 Statistics engine (mutex-protected)
   ├── Protocol counters
-  ├── Bandwidth (bytes/interval)
+  ├── Bandwidth (bits/s per refresh interval)
   ├── Top talkers (IP → bytes)
   ├── HTTP counters
-  └── FlowTracker (5-tuple → state)
+  └── FlowTracker (5-tuple → state, idle expiry)
      │
      ▼
 Display goroutine (1s ticker)
@@ -230,7 +249,7 @@ make docker     # build Docker image
 # Option 1
 sudo ./bin/gopacketsniffer -i eth0
 
-# Option 2 — grant capabilities without sudo
+# Option 2 - grant capabilities without sudo
 sudo setcap cap_net_raw,cap_net_admin=eip ./bin/gopacketsniffer
 ./bin/gopacketsniffer -i eth0
 ```
@@ -240,15 +259,19 @@ sudo setcap cap_net_raw,cap_net_admin=eip ./bin/gopacketsniffer
 ip link show          # list available interfaces
 ```
 
-**Checksum validation fails on loopback**
-NIC hardware offloading computes checksums after the packet leaves userspace.
-Disable with: `sudo ethtool -K eth0 tx off rx off`
+**Dropped counter keeps climbing**
+Frames are arriving faster than they can be decoded. Narrow the capture with
+a filter (`-f "tcp port 443"`) so the kernel discards the rest.
+
+**No HTTP statistics**
+Only plaintext HTTP/1.x is recognised. HTTPS and HTTP/2 payloads are
+encrypted or binary and show up as plain TCP.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT - see [LICENSE](LICENSE)
 
 ---
 

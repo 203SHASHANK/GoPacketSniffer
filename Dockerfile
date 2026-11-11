@@ -12,13 +12,16 @@ RUN go mod download
 
 # Copy source and build a static binary
 COPY . .
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s" \
+    -ldflags="-w -s -X main.version=${VERSION}" \
     -o gopacketsniffer \
     ./cmd/gopacketsniffer
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.20
+
+ARG VERSION=dev
 
 RUN apk add --no-cache ca-certificates
 
@@ -31,4 +34,4 @@ CMD ["-i", "eth0"]
 
 LABEL org.opencontainers.image.title="GoPacketSniffer"
 LABEL org.opencontainers.image.description="High-performance network packet analyzer"
-LABEL org.opencontainers.image.version="1.0.0"
+LABEL org.opencontainers.image.version="${VERSION}"

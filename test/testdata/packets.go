@@ -63,7 +63,7 @@ var UDPDNSPacket = []byte{
 	0x00, 0x35, // Dst Port: 53
 	0x00, 0x09, // Length: 9 (8 header + 1 data)
 	0x00, 0x00, // Checksum
-	0xAA,       // 1 byte of dummy payload
+	0xAA, // 1 byte of dummy payload
 }
 
 // ICMPEchoPacket is a minimal Ethernet/IPv4/ICMP echo request frame.
@@ -78,8 +78,8 @@ var ICMPEchoPacket = []byte{
 	0x00, 0x1c, // Total Length = 28 (20 IP + 8 ICMP)
 	0x00, 0x01,
 	0x00, 0x00,
-	0x40,       // TTL=64
-	0x01,       // Protocol=ICMP (1)
+	0x40, // TTL=64
+	0x01, // Protocol=ICMP (1)
 	0x00, 0x00,
 	0xc0, 0xa8, 0x01, 0x64,
 	0x08, 0x08, 0x08, 0x08,

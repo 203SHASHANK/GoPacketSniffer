@@ -8,69 +8,102 @@ import (
 	"gopacketsniffer/internal/models"
 )
 
-// packetPool reduces GC pressure by reusing PacketInfo allocations in the
-// hot decode path. Callers must reset fields before use.
+// packetPool recycles PacketInfo values so the decode path does not allocate
+// a new one for every packet.
 var packetPool = sync.Pool{
-	New: func() any { return &models.PacketInfo{} },
+	New: func() any { return new(models.PacketInfo) },
 }
 
-// GetPacketInfo retrieves a PacketInfo from the pool.
+// GetPacketInfo returns a zeroed PacketInfo from the pool.
 func GetPacketInfo() *models.PacketInfo {
-	return packetPool.Get().(*models.PacketInfo)
+	p, ok := packetPool.Get().(*models.PacketInfo)
+	if !ok {
+		return new(models.PacketInfo)
+	}
+	return p
 }
 
-// PutPacketInfo returns a PacketInfo to the pool after zeroing it.
+// PutPacketInfo zeroes p and returns it to the pool. The caller must not use
+// p afterwards.
 func PutPacketInfo(p *models.PacketInfo) {
-	*p = models.PacketInfo{} // zero all fields
+	if p == nil {
+		return
+	}
+	*p = models.PacketInfo{} // clear so the next user never sees stale fields
 	packetPool.Put(p)
 }
 
-// DecodePacket parses a raw Ethernet frame through all protocol layers and
-// returns a PacketInfo with every extracted field populated.
+// DecodePacket parses a raw Ethernet frame layer by layer and returns a
+// PacketInfo with every field it could extract.
 //
-// The returned *PacketInfo is owned by the caller. When done, call
-// PutPacketInfo to return it to the pool.
+// The result comes from a pool: call PutPacketInfo once it is no longer
+// needed. On error nothing needs to be returned.
 //
-// Unsupported EtherTypes or IP protocols are recorded with Protocol="Other"
-// and no error is returned — unknown traffic is valid, just unrecognised.
+// Frames that are not IPv4, and IPv4 packets carrying a protocol other than
+// TCP, UDP or ICMP, are reported with Protocol "Other" and a nil error. They
+// are valid traffic that this decoder simply does not look into. An error
+// means the frame was truncated or malformed.
 func DecodePacket(raw []byte, ts time.Time) (*models.PacketInfo, error) {
 	info := GetPacketInfo()
+	if err := decodeInto(info, raw); err != nil {
+		PutPacketInfo(info)
+		return nil, err
+	}
 	info.Timestamp = ts
 	info.TotalBytes = len(raw)
+	return info, nil
+}
+
+// decodeInto fills info from raw, stopping at the first layer it does not
+// recognise.
+func decodeInto(info *models.PacketInfo, raw []byte) error {
 	info.Protocol = "Other"
 
-	// --- Layer 2: Ethernet ---
+	// Layer 2: Ethernet
 	eth, err := ParseEthernet(raw)
 	if err != nil {
-		PutPacketInfo(info)
-		return nil, fmt.Errorf("ethernet: %w", err)
+		return fmt.Errorf("ethernet: %w", err)
 	}
 	info.SrcMAC = eth.SrcMAC.String()
 	info.DstMAC = eth.DstMAC.String()
 
 	if eth.EtherType != EtherTypeIPv4 {
-		return info, nil
+		return nil // ARP, IPv6, ...
 	}
 
-	// --- Layer 3: IPv4 ---
+	// Layer 3: IPv4
 	ip, err := ParseIPv4(eth.Payload)
 	if err != nil {
-		PutPacketInfo(info)
-		return nil, fmt.Errorf("ipv4: %w", err)
+		return fmt.Errorf("ipv4: %w", err)
 	}
 	info.SrcIP = ip.SrcIP.String()
 	info.DstIP = ip.DstIP.String()
 	info.TTL = ip.TTL
 
-	// --- Layer 4: TCP / UDP / ICMP ---
+	// Later fragments have no transport header: what sits at that position
+	// is the middle of the original payload. Account for the packet under
+	// its protocol but do not try to decode ports or flags from it.
+	if ip.IsLaterFragment() {
+		info.IsFragment = true
+		switch ip.Protocol {
+		case IPProtocolTCP:
+			info.Protocol = "TCP"
+		case IPProtocolUDP:
+			info.Protocol = "UDP"
+		case IPProtocolICMP:
+			info.Protocol = "ICMP"
+		}
+		return nil
+	}
+
+	// Layer 4: TCP / UDP / ICMP
 	switch ip.Protocol {
 	case IPProtocolTCP:
-		info.Protocol = "TCP"
 		tcp, err := ParseTCP(ip.Payload)
 		if err != nil {
-			PutPacketInfo(info)
-			return nil, fmt.Errorf("tcp: %w", err)
+			return fmt.Errorf("tcp: %w", err)
 		}
+		info.Protocol = "TCP"
 		info.SrcPort = tcp.SrcPort
 		info.DstPort = tcp.DstPort
 		info.TCPFlags = tcp.FlagsStr
@@ -78,30 +111,28 @@ func DecodePacket(raw []byte, ts time.Time) (*models.PacketInfo, error) {
 		info.SeqNum = tcp.SeqNum
 		info.AckNum = tcp.AckNum
 
-		// --- Layer 7: HTTP (best-effort, no error on failure) ---
+		// Layer 7: HTTP. Best effort; a nil result just means "not HTTP".
 		if len(tcp.Payload) > 0 {
 			info.HTTP = ParseHTTP(tcp.Payload)
 		}
 
 	case IPProtocolUDP:
-		info.Protocol = "UDP"
 		udp, err := ParseUDP(ip.Payload)
 		if err != nil {
-			PutPacketInfo(info)
-			return nil, fmt.Errorf("udp: %w", err)
+			return fmt.Errorf("udp: %w", err)
 		}
+		info.Protocol = "UDP"
 		info.SrcPort = udp.SrcPort
 		info.DstPort = udp.DstPort
 
 	case IPProtocolICMP:
-		info.Protocol = "ICMP"
 		icmp, err := ParseICMP(ip.Payload)
 		if err != nil {
-			PutPacketInfo(info)
-			return nil, fmt.Errorf("icmp: %w", err)
+			return fmt.Errorf("icmp: %w", err)
 		}
-		info.TCPFlags = icmp.TypeStr
+		info.Protocol = "ICMP"
+		info.ICMPType = icmp.TypeStr
 	}
 
-	return info, nil
+	return nil
 }

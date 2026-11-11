@@ -1,8 +1,10 @@
 package stats
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRecordAndSnapshot(t *testing.T) {
@@ -73,5 +75,65 @@ func TestDropCounter(t *testing.T) {
 	snap := s.GetSnapshot()
 	if snap.DroppedPackets != 2 {
 		t.Errorf("DroppedPackets=%d, want 2", snap.DroppedPackets)
+	}
+}
+
+func TestBandwidthIsBitsPerSecond(t *testing.T) {
+	s := New()
+	// Pretend the interval started exactly one second ago.
+	s.lastTick = time.Now().Add(-time.Second)
+	s.Record("TCP", "1.1.1.1", 1000)
+
+	snap := s.GetSnapshot()
+	// 1000 bytes in ~1s is ~8000 bit/s; allow for scheduling jitter.
+	if snap.CurrentBPS < 7000 || snap.CurrentBPS > 8000 {
+		t.Errorf("CurrentBPS=%.0f, want about 8000", snap.CurrentBPS)
+	}
+	if snap.PeakBPS != snap.CurrentBPS || snap.PeakBPSAt.IsZero() {
+		t.Errorf("peak not recorded: %.0f at %v", snap.PeakBPS, snap.PeakBPSAt)
+	}
+}
+
+func TestRecordHTTP(t *testing.T) {
+	s := New()
+	s.RecordHTTP(true, 0)
+	for _, code := range []int{200, 204, 301, 404, 500, 503} {
+		s.RecordHTTP(false, code)
+	}
+
+	snap := s.GetSnapshot()
+	if snap.HTTPRequests != 1 || snap.HTTP2xx != 2 || snap.HTTP4xx != 1 || snap.HTTP5xx != 2 {
+		t.Errorf("requests=%d 2xx=%d 4xx=%d 5xx=%d, want 1/2/1/2",
+			snap.HTTPRequests, snap.HTTP2xx, snap.HTTP4xx, snap.HTTP5xx)
+	}
+}
+
+func TestTopTalkersStableOrderOnTies(t *testing.T) {
+	s := New()
+	for _, ip := range []string{"10.0.0.3", "10.0.0.1", "10.0.0.2"} {
+		s.Record("UDP", ip, 100)
+	}
+	got := s.GetSnapshot().TopTalkers
+	for i, want := range []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"} {
+		if got[i].IP != want {
+			t.Fatalf("talker %d = %s, want %s", i, got[i].IP, want)
+		}
+	}
+}
+
+func TestTopTalkersBounded(t *testing.T) {
+	tt := newTopTalkers(3)
+	tt.limit = 8
+
+	tt.add("heavy", 1_000_000)
+	for i := 0; i < 100; i++ {
+		tt.add(fmt.Sprintf("10.0.0.%d", i), 1)
+	}
+
+	if len(tt.counts) > tt.limit {
+		t.Errorf("tracking %d addresses, limit is %d", len(tt.counts), tt.limit)
+	}
+	if top := tt.topN(); len(top) == 0 || top[0].IP != "heavy" {
+		t.Errorf("heaviest talker lost during pruning: %+v", top)
 	}
 }
