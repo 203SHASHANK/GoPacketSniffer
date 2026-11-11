@@ -1,4 +1,4 @@
-# GoPacketSniffer — Project Goal
+# GoPacketSniffer - Project Goal
 
 Build a command-line network packet analyzer in Go that:
 
@@ -11,7 +11,7 @@ Build a command-line network packet analyzer in Go that:
 
 ## Technical Constraints
 
-- Pure Go — no cgo, no external C libraries
+- Pure Go - no cgo, no external C libraries
 - Linux only (raw socket API)
 - Requires root or `CAP_NET_RAW` + `CAP_NET_ADMIN`
 - Single static binary

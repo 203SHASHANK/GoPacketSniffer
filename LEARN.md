@@ -1,4 +1,4 @@
-# GoPacketSniffer — Deep-Dive Learning Guide
+# GoPacketSniffer - Deep-Dive Learning Guide
 
 > Read this document top to bottom once. By the end you will understand every
 > line of every file in this project, every networking concept it touches, and
@@ -9,10 +9,10 @@
 ## Table of Contents
 
 1. [What is a Packet Sniffer? (Real-World Analogy)](#1-what-is-a-packet-sniffer)
-2. [How Computer Networks Work — From the Ground Up](#2-how-computer-networks-work)
-3. [The OSI Model — The Layer Cake](#3-the-osi-model)
+2. [How Computer Networks Work - From the Ground Up](#2-how-computer-networks-work)
+3. [The OSI Model - The Layer Cake](#3-the-osi-model)
 4. [Project Directory Map](#4-project-directory-map)
-5. [Data Flow — The Big Picture](#5-data-flow)
+5. [Data Flow - The Big Picture](#5-data-flow)
 6. [File-by-File Deep Dive](#6-file-by-file-deep-dive)
    - [cmd/gopacketsniffer/main.go](#61-cmdgopacketsniffermain-go)
    - [internal/capture/capture.go](#62-internalcapturecapturego)
@@ -33,9 +33,9 @@
    - [internal/display/terminal.go](#617-internaldisplayterminalgo)
    - [internal/pcap/writer.go](#618-internalpcapwritergo)
    - [test/testdata/packets.go](#619-testtestdatapacketsgo)
-7. [Go Concurrency — Goroutines, Channels, WaitGroups](#7-go-concurrency)
-8. [Memory Management — sync.Pool and the GC](#8-memory-management)
-9. [Binary Parsing — Reading Bytes Like a Protocol Stack](#9-binary-parsing)
+7. [Go Concurrency - Goroutines, Channels, WaitGroups](#7-go-concurrency)
+8. [Memory Management - sync.Pool and the GC](#8-memory-management)
+9. [Binary Parsing - Reading Bytes Like a Protocol Stack](#9-binary-parsing)
 10. [Full Variable / Acronym Glossary](#10-full-variable--acronym-glossary)
 11. [Build, Run, Test, Docker](#11-build-run-test-docker)
 12. [Step-by-Step Packet Journey](#12-step-by-step-packet-journey)
@@ -49,22 +49,22 @@
 Imagine every piece of data on a network is an **envelope** being carried by a
 postal worker through your neighbourhood. Normally you only open envelopes
 addressed to you. A **packet sniffer** is like standing at the neighbourhood
-sorting office and reading every envelope that passes through — regardless of
+sorting office and reading every envelope that passes through - regardless of
 who it is addressed to.
 
 In networking terms:
-- **Envelope** = a **packet** (or frame, segment, datagram — the name changes
+- **Envelope** = a **packet** (or frame, segment, datagram - the name changes
   per layer, but the concept is the same: a chunk of bytes with a header that
   says where it came from and where it is going).
 - **Sorting office** = the **network interface card (NIC)** in your computer.
-- **Reading all envelopes** = **promiscuous mode** — a mode where the NIC
+- **Reading all envelopes** = **promiscuous mode** - a mode where the NIC
   forwards every frame to the operating system, even those not addressed to
   your machine's MAC address.
 
 ### Why Packet Sniffers Need Root
 
 The Linux kernel tightly controls access to raw network traffic. Creating an
-`AF_PACKET` socket — the interface this project uses — requires the
+`AF_PACKET` socket - the interface this project uses - requires the
 `CAP_NET_RAW` capability, which normal processes do not have. Running as root
 grants all capabilities, which is why the tool must be started with `sudo`.
 
@@ -146,13 +146,13 @@ each layer like an onion:
 ```
 Raw bytes from AF_PACKET socket
   ↓
-ParseEthernet()  — reads 14-byte Ethernet header, exposes IP payload
+ParseEthernet()  - reads 14-byte Ethernet header, exposes IP payload
   ↓
-ParseIPv4()      — reads 20-byte IP header, exposes TCP/UDP/ICMP payload
+ParseIPv4()      - reads 20-byte IP header, exposes TCP/UDP/ICMP payload
   ↓
 ParseTCP()   or ParseUDP()   or ParseICMP()
   ↓
-ParseHTTP()  — best-effort scan of TCP payload for HTTP/1.x messages
+ParseHTTP()  - best-effort scan of TCP payload for HTTP/1.x messages
 ```
 
 ---
@@ -173,7 +173,7 @@ GoPacketSniffer/
 │   │   └── ringbuffer.go        ← Lock-free circular buffer (SPSC)
 │   │
 │   ├── models/
-│   │   └── packet.go            ← PacketInfo struct — the universal data carrier
+│   │   └── packet.go            ← PacketInfo struct - the universal data carrier
 │   │
 │   ├── parser/
 │   │   ├── decoder.go           ← Orchestrates the full parse chain; manages sync.Pool
@@ -220,19 +220,19 @@ appearing on screen:
 
 ```
 NIC hardware
-   │  (DMA — Direct Memory Access: kernel puts bytes directly into RAM)
+   │  (DMA - Direct Memory Access: kernel puts bytes directly into RAM)
    ▼
 Linux kernel AF_PACKET socket
-   │  (BPF filter runs HERE in the kernel — non-matching packets never
+   │  (BPF filter runs HERE in the kernel - non-matching packets never
    │   reach userspace, saving CPU)
    ▼
 capture.CaptureLoop  (goroutine, blocked on unix.Recvfrom)
-   │  copies frame into a fresh []byte slice
+   │  timestamps the frame and copies it into a fresh []byte slice
    ▼
-packetChan  (buffered Go channel, capacity 4096)
+frames  (buffered Go channel of capture.Frame, capacity 4096)
    │
    ▼
-Parse Worker goroutine  (range packetChan)
+Parse Worker goroutine  (range frames)
    │
    ├── pcap.Writer.WritePacket()   (if -w flag set, save raw frame to disk)
    │
@@ -270,6 +270,7 @@ goroutine lifecycle.
 #### Imports Explained
 
 ```go
+"errors"        // standard library: errors.Join combines shutdown errors
 "flag"          // standard library: parses command-line arguments like -i eth0
 "fmt"           // standard library: formatted I/O (Printf, Println)
 "log"           // standard library: logging with timestamps to stderr
@@ -283,14 +284,21 @@ goroutine lifecycle.
 #### Flag Variables
 
 ```go
-iface   *string  // -i  the network interface name, e.g. "eth0", "wlan0", "lo"
-verbose *bool    // -v  if true, print every decoded packet
-filter  *string  // -f  BPF filter expression, e.g. "tcp port 80"
-writeTo *string  // -w  file path to save .pcap output
+type options struct {
+    iface   string  // -i  the network interface name, e.g. "eth0", "wlan0", "lo"
+    verbose bool    // -v  if true, print every decoded packet
+    filter  string  // -f  BPF filter expression, e.g. "tcp port 80"
+    writeTo string  // -w  file path to save .pcap output
+}
 ```
 
-The `flag` package uses pointer types so the library can write the parsed value
-into the variable. You dereference with `*iface`, `*verbose`, etc.
+`flag.StringVar(&opts.iface, "i", ...)` hands the `flag` package a pointer to
+the struct field, and `flag.Parse()` writes the parsed value through it. A
+fifth flag, `-version`, prints the version string and exits.
+
+`main` itself only parses flags. The real work happens in `run(opts)`, which
+returns an `error`. That split lets `run` use `defer` for cleanup (a `defer`
+never runs if you call `os.Exit` or `log.Fatal` in the same function).
 
 #### `var version = "dev"`
 
@@ -305,10 +313,15 @@ source.
 #### Channels and WaitGroups
 
 ```go
-done       chan struct{}    // closed to broadcast shutdown to all goroutines
-packetChan chan []byte      // raw frame bytes flowing from capture to parse worker
-var wg     sync.WaitGroup  // wg.Wait() blocks main until all goroutines finish
+done       chan struct{}       // closed to broadcast shutdown to all goroutines
+frames     chan capture.Frame  // captured frames flowing from capture to parse worker
+captureErr chan error          // receives CaptureLoop's result when it returns
+var wg     sync.WaitGroup      // wg.Wait() blocks until all goroutines finish
 ```
+
+A `capture.Frame` is the raw bytes plus the time they were read from the
+socket. Taking the timestamp in the capture goroutine (not later in the parse
+worker) keeps it accurate even when frames wait in the queue.
 
 **`chan struct{}`**: An empty struct channel is Go's idiom for a "signal-only"
 channel. Sending a value costs memory; closing costs nothing and wakes up all
@@ -323,11 +336,21 @@ not return before goroutines have finished cleaning up.
 ```go
 sigCh := make(chan os.Signal, 1)
 signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-<-sigCh           // main goroutine blocks here until Ctrl+C
+
+select {
+case <-sigCh:              // Ctrl+C or kill
+case err := <-captureErr:  // the capture loop stopped on its own
+}
 close(done)       // broadcast: "stop what you are doing"
-capture.Close(fd) // close the socket so Recvfrom unblocks
 wg.Wait()         // wait for all goroutines to finish
+// then: close the pcap file, and (via defer) the socket
 ```
+
+The capture goroutine notices `done` because its socket has a 200 ms receive
+timeout: `Recvfrom` returns at least that often and the loop re-checks the
+channel. Closing the socket from another goroutine is **not** a reliable way to
+wake a blocked `recvfrom` on Linux, so the socket is closed last, after
+everything that uses it has stopped.
 
 **SIGINT** = Signal Interrupt. Generated when you press Ctrl+C in a terminal.
 **SIGTERM** = Signal Terminate. The default signal sent by `kill <pid>` and by
@@ -347,9 +370,9 @@ socket type determines what you can see:
 
 | Socket Type | Sees |
 |---|---|
-| `AF_INET / SOCK_STREAM` | TCP data only — kernel strips all headers |
+| `AF_INET / SOCK_STREAM` | TCP data only - kernel strips all headers |
 | `AF_INET / SOCK_RAW` | IP packets (no Ethernet header) |
-| `AF_PACKET / SOCK_RAW` | Full Ethernet frames — everything |
+| `AF_PACKET / SOCK_RAW` | Full Ethernet frames - everything |
 
 This project uses `AF_PACKET` to get complete frames including MAC addresses.
 This is exactly what Wireshark and tcpdump use internally.
@@ -360,7 +383,7 @@ Analogy: AF_INET is like reading only the letter inside the envelope.
          and the letter (TCP/UDP) together.
 ```
 
-#### `OpenRawSocket` — Step by Step
+#### `OpenRawSocket` - Step by Step
 
 ```go
 ethPAll := htons(unix.ETH_P_ALL)
@@ -393,14 +416,23 @@ unix.Bind(fd, &addr)
 - **Ifindex** = Interface Index. The kernel's integer identifier for a NIC.
   `ip link show` lists these: `1: lo`, `2: eth0`, etc.
 
-#### `SetPromiscuousMode` — What It Does
+Two more socket options are set before the fd is returned:
+
+- **`SO_RCVTIMEO`** (200 ms): makes `Recvfrom` give up and return `EAGAIN` if
+  nothing arrives in time, so the capture loop can check for shutdown.
+- **`PACKET_IGNORE_OUTGOING`** (loopback only): on `lo` every packet crosses
+  the socket twice, once going out and once coming back in. This option tells
+  the kernel to deliver only one copy, otherwise everything would be counted
+  double.
+
+#### `SetPromiscuousMode` - What It Does
 
 Normally a NIC's hardware filter only passes frames to the OS if:
 - The destination MAC matches the NIC's own MAC, OR
 - The destination MAC is the broadcast address (`ff:ff:ff:ff:ff:ff`), OR
 - The NIC is subscribed to a multicast group matching the destination.
 
-**Promiscuous mode** disables that filter — the NIC forwards **every** frame on
+**Promiscuous mode** disables that filter - the NIC forwards **every** frame on
 the wire to the OS.
 
 ```
@@ -425,46 +457,60 @@ unix.SetsockoptPacketMreq(fd, unix.SOL_PACKET, unix.PACKET_ADD_MEMBERSHIP, &mreq
 - **setsockopt** = Set Socket Option. A universal kernel API for configuring
   socket behaviour.
 
-#### `CaptureLoop` — The Hot Path
+#### `CaptureLoop` - The Hot Path
 
 ```go
 const maxFrameSize = 65535
 buf := make([]byte, maxFrameSize)
 ```
-The maximum Ethernet frame size is 65535 bytes (the limit of the IP Total
-Length field). We allocate this once outside the loop to avoid allocating on
-every iteration.
+A normal Ethernet frame is about 1514 bytes, but with offloading (GRO/TSO) the
+kernel can hand over merged frames of up to 64 KB (the limit of the IP Total
+Length field). We allocate the buffer once outside the loop to avoid
+allocating on every iteration.
 
 ```go
-bytesRead, _, err := unix.Recvfrom(fd, buf, 0)
+n, _, err := unix.Recvfrom(fd, buf, 0)
+if err != nil {
+    if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EINTR) {
+        continue
+    }
+    return fmt.Errorf("recvfrom: %w", err)
+}
 ```
 - **Recvfrom** = Receive From. A system call that reads data from a socket.
-  It **blocks** (pauses the goroutine) until a frame arrives. This is
-  efficient — the OS wakes the goroutine only when there is data.
-- `bytesRead` is how many bytes the kernel actually wrote into `buf`.
+  It **blocks** (pauses the goroutine) until a frame arrives or the 200 ms
+  timeout expires. The OS wakes the goroutine only when there is something to
+  do.
+- `n` is how many bytes the kernel actually wrote into `buf`.
+- **EAGAIN** is the timeout expiring; **EINTR** means a signal interrupted the
+  call. Neither is a real failure, so the loop just goes around again (and
+  checks `done` at the top).
 
 ```go
-frame := make([]byte, bytesRead)
-copy(frame, buf[:bytesRead])
+data := make([]byte, n)
+copy(data, buf[:n])
 ```
-The kernel reuses `buf` for the next frame. We **must copy** the data into a
-new slice before sending it to the channel, otherwise the parse worker would
-read overwritten data.
+`buf` is reused for the next frame. We **must copy** the data into a new slice
+before sending it to the channel, otherwise the parse worker would read
+overwritten data.
 
 ```go
 select {
-case packetChan <- frame:
+case frames <- Frame{Data: data, Timestamp: ts}:
 default:
-    // Channel full — drop packet rather than block the capture goroutine.
+    if onDrop != nil {
+        onDrop()
+    }
 }
 ```
-The **non-blocking send** pattern. If `packetChan` has spare capacity, the
-frame is queued. If the channel is full (parse worker is behind), the frame is
-dropped and counted as a dropped packet. This prevents the capture goroutine
-from blocking — it is more important to keep reading from the NIC than to
+The **non-blocking send** pattern. If the channel has spare capacity, the
+frame is queued. If it is full (parse worker is behind), the frame is dropped
+and `onDrop` is called; `main` passes `metrics.RecordDrop`, so the loss shows
+up in the dashboard's Dropped counter. This prevents the capture goroutine
+from blocking: it is more important to keep reading from the NIC than to
 preserve every single packet.
 
-#### `htons` — Byte Order Conversion
+#### `htons` - Byte Order Conversion
 
 ```go
 func htons(v uint16) uint16 {
@@ -483,9 +529,9 @@ either:
 `htons` reinterprets the integer as a 2-byte array and swaps the bytes.
 
 ```
-unsafe.Pointer(&v)    — get the memory address of v
-(*[2]byte)(...)       — reinterpret that address as a pointer to a 2-byte array
-b[0]<<8 | b[1]        — reconstruct with bytes swapped
+unsafe.Pointer(&v)    - get the memory address of v
+(*[2]byte)(...)       - reinterpret that address as a pointer to a 2-byte array
+b[0]<<8 | b[1]        - reconstruct with bytes swapped
 ```
 
 ---
@@ -508,7 +554,7 @@ a non-zero value, the packet is passed to userspace.
 Analogy: BPF is a bouncer at a club door.
          Instead of checking every person's ID after they enter,
          the bouncer (BPF) checks at the door and only lets in matching people.
-         This saves enormous CPU time — rejected packets never even reach Go.
+         This saves enormous CPU time - rejected packets never even reach Go.
 ```
 
 Modern Linux eBPF (extended BPF) is used for tracing, firewalling, load
@@ -534,7 +580,10 @@ Key instructions used in this file:
 |---|---|
 | `LoadAbsolute{Off: 23, Size: 1}` | Load 1 byte from offset 23 of the packet into register A |
 | `JumpIf{Cond: JumpEqual, Val: 6}` | If A == 6 (TCP protocol), skip `SkipTrue` instructions; else skip `SkipFalse` |
-| `RetConstant{Val: 0xFFFF}` | Accept packet (return max size) |
+| `JumpIf{Cond: JumpBitsSet, Val: 0x1fff}` | Jump if any of the masked bits are set in A (`A & 0x1fff != 0`) |
+| `LoadMemShift{Off: 14}` | Set register X to `4 * (byte[14] & 0x0f)`, the IP header length in bytes |
+| `LoadIndirect{Off: 14, Size: 2}` | Load 2 bytes from offset `X + 14` into A |
+| `RetConstant{Val: 262144}` | Accept packet (keep up to that many bytes, i.e. all of it) |
 | `RetConstant{Val: 0}` | Reject packet (return 0 bytes) |
 
 #### Ethernet Frame Offsets Used in BPF
@@ -548,44 +597,65 @@ Offset 14–33 : IPv4 header (20 bytes minimum)
   Offset 23  : IP Protocol (1 = ICMP, 6 = TCP, 17 = UDP)  ← BPF checks here
   Offset 26–29: Source IP
   Offset 30–33: Destination IP
-Offset 34–35 : TCP/UDP Source Port   ← BPF checks here for "port" filters
+Offset 34–35 : TCP/UDP Source Port   ← only when the IP header has no options
 Offset 36–37 : TCP/UDP Destination Port
 ```
+
+The port offsets are the catch: the IP header is 20 bytes only when it has no
+options. Its real length is in the IHL nibble at offset 14. A port filter that
+always reads offset 34 would look at the wrong bytes for packets with options,
+so the filter computes the header length first (`LoadMemShift`) and reads the
+ports relative to it (`LoadIndirect`).
+
+Two more traps the filters guard against:
+- **Non-IPv4 frames.** In an ARP or IPv6 frame, offset 23 is some unrelated
+  byte that may happen to equal 6. Every filter therefore starts by checking
+  that the EtherType at offset 12 is `0x0800`.
+- **IP fragments.** Only the first fragment of a split datagram contains the
+  TCP/UDP header. In later fragments the "port" bytes are payload, so port
+  filters reject any packet whose fragment offset is non-zero.
 
 #### Example: "tcp port 80" BPF Program
 
 ```
-Instruction 0: Load byte at offset 23   (IP protocol field)
-Instruction 1: If it equals 6 (TCP), skip 0 instructions forward; else skip 3
-Instruction 2: Load 2 bytes at offset 34 (TCP source port)
-Instruction 3: If it equals 80, skip 2 instructions forward; else skip 0
-Instruction 4: Load 2 bytes at offset 36 (TCP destination port)
-Instruction 5: If it equals 80, skip 0 instructions forward; else skip 1
-Instruction 6: Return 0xFFFF (accept)
-Instruction 7: Return 0 (reject)
+Instruction  0: Load 2 bytes at offset 12      (EtherType)
+Instruction  1: If it equals 0x0800 continue; else jump to 12 (reject)
+Instruction  2: Load byte at offset 23         (IP protocol field)
+Instruction  3: If it equals 6 (TCP) continue; else jump to 12 (reject)
+Instruction  4: Load 2 bytes at offset 20      (flags + fragment offset)
+Instruction  5: If any of the low 13 bits are set jump to 12 (reject)
+Instruction  6: X = 4 * (byte at offset 14 & 0x0f)   (IP header length)
+Instruction  7: Load 2 bytes at offset X+14    (source port)
+Instruction  8: If it equals 80 jump to 11 (accept); else continue
+Instruction  9: Load 2 bytes at offset X+16    (destination port)
+Instruction 10: If it equals 80 continue; else jump to 12 (reject)
+Instruction 11: Return 262144 (accept)
+Instruction 12: Return 0 (reject)
 ```
 
-This program accepts only TCP packets where either the source or destination
-port is 80 (HTTP).
+This program accepts only unfragmented (or first-fragment) IPv4 TCP packets
+where either the source or destination port is 80 (HTTP).
 
-#### `attachRaw` — The `setsockopt` System Call
+BPF jumps are relative ("skip N instructions"), which is tedious and
+error-prone to count by hand. The code uses a small `builder` type: each jump
+is recorded with a symbolic target (`next`, `accept` or `reject`), and
+`finish()` appends the two return instructions and fills in the skip counts.
+
+#### Attaching the Filter: The `setsockopt` System Call
 
 ```go
-unix.Syscall6(
-    unix.SYS_SETSOCKOPT,     // system call number
-    uintptr(fd),             // socket file descriptor
-    unix.SOL_SOCKET,         // option level: generic socket layer
-    unix.SO_ATTACH_FILTER,   // option name: attach a BPF filter
-    uintptr(unsafe.Pointer(&prog)),  // pointer to the BPF program struct
-    unsafe.Sizeof(prog),     // size of the struct
-    0,                       // unused
-)
+prog := unix.SockFprog{
+    Len:    uint16(len(filters)),  // number of instructions
+    Filter: &filters[0],           // pointer to the first instruction
+}
+unix.SetsockoptSockFprog(fd, unix.SOL_SOCKET, unix.SO_ATTACH_FILTER, &prog)
 ```
 
-**Syscall6** directly invokes a Linux system call with up to 6 arguments. This
-is the raw interface to the kernel. Most Go code uses higher-level wrappers, but
-here we need direct control because `SO_ATTACH_FILTER` is not wrapped by the
-`unix` package.
+`unix.SockFprog` mirrors the kernel's `struct sock_fprog`: an instruction
+count plus a pointer to an array of `sock_filter` entries.
+`SetsockoptSockFprog` is the typed wrapper around the `setsockopt(2)` system
+call for exactly this struct, so no `unsafe` pointer casting is needed in our
+code.
 
 **SOL_SOCKET** = Socket Option Level SOCKET. Options at this level apply to all
 socket types (TCP, UDP, raw, etc.), in contrast to `SOL_TCP` which applies only
@@ -604,7 +674,7 @@ transferring packets between goroutines without mutex overhead.
 #### What is a Ring Buffer?
 
 A ring buffer (also called a circular buffer) is a fixed-size array where the
-write position wraps back to the beginning when it reaches the end — like a
+write position wraps back to the beginning when it reaches the end - like a
 racetrack where laps repeat.
 
 ```
@@ -630,7 +700,7 @@ If capacity is 8 (binary `1000`), then `mask = 7` (binary `0111`). Doing
 instruction instead of a division (slow). This is a classic performance
 optimisation.
 
-#### `atomic.Uint64` — Lock-Free Synchronisation
+#### `atomic.Uint64` - Lock-Free Synchronisation
 
 ```go
 write atomic.Uint64
@@ -643,7 +713,7 @@ location as a single, uninterruptible operation. No mutex needed.
 ```
 Analogy: Two people sharing a counter on a whiteboard.
          Normal variable: Person A reads "5", Person B reads "5",
-                         both add 1, both write "6" — one increment lost!
+                         both add 1, both write "6" - one increment lost!
          Atomic variable: The "read-add-write" happens as one step,
                          so one person sees "6" and the next sees "7".
 ```
@@ -656,7 +726,7 @@ read/write of the indices is sufficient for correctness without a mutex.
 
 ### 6.5 `internal/models/packet.go`
 
-**Purpose**: Defines `PacketInfo` — the central data structure that carries
+**Purpose**: Defines `PacketInfo` - the central data structure that carries
 all decoded information about one packet through the pipeline.
 
 #### `PacketInfo` Field-by-Field
@@ -672,8 +742,9 @@ type PacketInfo struct {
     // IP layer
     SrcIP    string       // source IP, e.g. "192.168.1.1"
     DstIP    string       // destination IP, e.g. "8.8.8.8"
-    Protocol string       // "TCP", "UDP", "ICMP", "ARP", "Other"
-    TTL      uint8        // Time To Live — decremented at each router hop
+    Protocol string       // "TCP", "UDP", "ICMP", or "Other"
+    TTL      uint8        // Time To Live - decremented at each router hop
+    IsFragment bool       // true for 2nd+ IP fragments (no transport header)
     
     // Transport layer
     SrcPort uint16        // source port number (0–65535)
@@ -684,6 +755,9 @@ type PacketInfo struct {
     TCPRawFlags uint8     // raw bit flags byte (used by flow tracker)
     SeqNum      uint32    // TCP Sequence Number
     AckNum      uint32    // TCP Acknowledgment Number
+    
+    // ICMP-specific
+    ICMPType string       // human-readable: "EchoRequest"
     
     // Application layer
     HTTP *HTTPInfo        // nil if not HTTP; populated if TCP payload is HTTP
@@ -841,6 +915,29 @@ match, the packet is corrupted and discarded. This project reads but does not
 validate the checksum (validation would add CPU cost with limited value in a
 sniffing context).
 
+**Total Length**: Bytes 2–3 give the size of the whole IP packet (header +
+payload). It matters because Ethernet frames have a minimum size: a tiny
+packet is padded with zero bytes up to 60 bytes. Without Total Length those
+padding bytes would look like TCP or UDP payload. `ParseIPv4` therefore ends
+the payload at Total Length:
+
+```go
+end := len(data)
+if int(totalLen) >= headerLenBytes && int(totalLen) < end {
+    end = int(totalLen)
+}
+Payload: data[headerLenBytes:end]
+```
+
+The value is only trusted when it is plausible. With segmentation offload the
+kernel can show locally generated packets whose Total Length is 0, and in
+that case the whole buffer is used.
+
+**Fragment Offset**: The low 13 bits of bytes 6–7. When it is non-zero the
+packet is a later piece of a fragmented datagram and does **not** begin with a
+TCP/UDP/ICMP header. `IsLaterFragment()` reports this, and the decoder skips
+transport parsing for such packets.
+
 ---
 
 ### 6.8 `internal/parser/tcp.go`
@@ -867,7 +964,7 @@ sniffing context).
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-#### TCP Flags — The Control Bits
+#### TCP Flags - The Control Bits
 
 Each flag is one bit in byte 13 of the TCP header:
 
@@ -900,7 +997,7 @@ Client                          Server
 This project's flow tracker detects these flag patterns to track connection
 state: `SYN → ESTABLISHED → CLOSING → CLOSED`.
 
-#### `tcpFlagsString` — Bit Manipulation
+#### `tcpFlagsString` - Bit Manipulation
 
 ```go
 for _, f := range names {
@@ -911,8 +1008,8 @@ for _, f := range names {
 ```
 
 If `flags = 0x12` (binary `0001 0010`):
-- `flags & 0x02` (SYN) = `0x02 ≠ 0` → SYN is set ✓
-- `flags & 0x10` (ACK) = `0x10 ≠ 0` → ACK is set ✓
+- `flags & 0x02` (SYN) = `0x02 ≠ 0` → SYN is set
+- `flags & 0x10` (ACK) = `0x10 ≠ 0` → ACK is set
 - Result: `"[SYN,ACK]"`
 
 #### Data Offset (TCP Header Length)
@@ -927,7 +1024,7 @@ length in 32-bit words. Multiply by 4 to get bytes. This handles TCP options
 (e.g. MSS, SACK, Timestamps) that extend the header beyond the 20-byte minimum.
 
 **Window Size**: How many bytes the receiver is willing to accept before it must
-send an acknowledgment. This is TCP's **flow control** mechanism — the receiver
+send an acknowledgment. This is TCP's **flow control** mechanism - the receiver
 tells the sender how fast it can go.
 
 ---
@@ -947,7 +1044,7 @@ tells the sender how fast it can go.
 | Use cases | DNS, gaming, video | HTTP, email, file transfer |
 
 ```
-Analogy: UDP is like sending a postcard — you drop it in the box and
+Analogy: UDP is like sending a postcard - you drop it in the box and
          hope it arrives. TCP is like certified mail with a return receipt
          and retries if lost.
 ```
@@ -965,10 +1062,10 @@ Bytes 8+ : Data
 Total header size: exactly 8 bytes, always. No options, no variable length.
 
 **Well-known UDP ports**:
-- **53**: DNS (Domain Name System) — translates names to IPs
-- **67/68**: DHCP (Dynamic Host Configuration Protocol) — assigns IPs
-- **123**: NTP (Network Time Protocol) — clock synchronisation
-- **5353**: mDNS (multicast DNS) — local name resolution
+- **53**: DNS (Domain Name System) - translates names to IPs
+- **67/68**: DHCP (Dynamic Host Configuration Protocol) - assigns IPs
+- **123**: NTP (Network Time Protocol) - clock synchronisation
+- **5353**: mDNS (multicast DNS) - local name resolution
 
 ---
 
@@ -980,7 +1077,7 @@ Total header size: exactly 8 bytes, always. No options, no variable length.
 
 **ICMP** = Internet Control Message Protocol. A layer-3 protocol used for
 network diagnostics and error reporting. Unlike TCP/UDP, ICMP is not used for
-application data — it is the network's "error and status" language.
+application data - it is the network's "error and status" language.
 
 ```
 Analogy: ICMP is the postal system's notification cards:
@@ -1005,7 +1102,7 @@ Bytes 8+ : Data (often the original IP header + 8 bytes that caused the error)
 ```go
 ICMPTypeEchoReply       = 0    // response to a ping
 ICMPTypeDestUnreachable = 3    // packet could not reach destination
-ICMPTypeEchoRequest     = 8    // "ping" — are you there?
+ICMPTypeEchoRequest     = 8    // "ping" - are you there?
 ICMPTypeTimeExceeded    = 11   // TTL hit 0, traceroute uses this
 ```
 
@@ -1034,19 +1131,24 @@ encrypted (HTTPS). This parser:
 #### HTTP Method Detection
 
 ```go
-methods := []string{"GET ", "POST ", "PUT ", "DELETE ", "HEAD ",
-    "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "}
-prefix := string(data[:min(16, len(data))])
-for _, m := range methods {
-    if strings.HasPrefix(prefix, m) {
+var httpMethods = [][]byte{
+    []byte("GET "), []byte("POST "), []byte("PUT "), []byte("DELETE "),
+    []byte("HEAD "), []byte("OPTIONS "), []byte("PATCH "),
+    []byte("CONNECT "), []byte("TRACE "),
+}
+
+for _, m := range httpMethods {
+    if bytes.HasPrefix(data, m) {
         return true
     }
 }
 ```
 
 HTTP requests always start with an uppercase method followed by a space:
-`GET /index.html HTTP/1.1\r\n`. Checking the first 16 bytes is a fast
-heuristic to avoid parsing the whole payload for non-HTTP traffic.
+`GET /index.html HTTP/1.1\r\n`. Comparing a few leading bytes is a fast
+heuristic to avoid running the full parser on non-HTTP traffic. The list is
+built once at package level, and `bytes.HasPrefix` compares the raw bytes
+directly, so the check allocates nothing.
 
 #### HTTP Response Detection
 
@@ -1076,7 +1178,7 @@ keep-alive, etc.
 **Purpose**: Orchestrates the full parse chain and manages the `sync.Pool` for
 `PacketInfo` reuse.
 
-#### `sync.Pool` — Object Pooling
+#### `sync.Pool` - Object Pooling
 
 ```go
 var packetPool = sync.Pool{
@@ -1098,7 +1200,11 @@ allocating new ones.
 
 ```go
 func GetPacketInfo() *models.PacketInfo {
-    return packetPool.Get().(*models.PacketInfo)   // borrow
+    p, ok := packetPool.Get().(*models.PacketInfo)   // borrow
+    if !ok {
+        return new(models.PacketInfo)
+    }
+    return p
 }
 
 func PutPacketInfo(p *models.PacketInfo) {
@@ -1108,10 +1214,10 @@ func PutPacketInfo(p *models.PacketInfo) {
 ```
 
 **Critical**: The zeroing step `*p = models.PacketInfo{}` is mandatory. Without
-it, the next borrower would see stale data from the previous packet — a
+it, the next borrower would see stale data from the previous packet - a
 hard-to-find bug.
 
-#### `DecodePacket` — The Layer-Peeling Orchestrator
+#### `DecodePacket` - The Layer-Peeling Orchestrator
 
 ```go
 func DecodePacket(raw []byte, ts time.Time) (*models.PacketInfo, error) {
@@ -1127,7 +1233,7 @@ func DecodePacket(raw []byte, ts time.Time) (*models.PacketInfo, error) {
     info.DstMAC = eth.DstMAC.String()
 
     if eth.EtherType != EtherTypeIPv4 {
-        return info, nil   // ARP, IPv6, etc. — stop here
+        return info, nil   // ARP, IPv6, etc. - stop here
     }
 
     // Layer 3
@@ -1153,7 +1259,12 @@ func DecodePacket(raw []byte, ts time.Time) (*models.PacketInfo, error) {
 }
 ```
 
-Each layer calls the next with its **Payload** field — the bytes that remain
+One special case sits between layer 3 and layer 4: if the IP packet is a
+later fragment (`ip.IsLaterFragment()`), the decoder sets `info.IsFragment`,
+labels the packet with its protocol so it is still counted, and returns
+without parsing a transport header that is not there.
+
+Each layer calls the next with its **Payload** field - the bytes that remain
 after stripping the current layer's header. This is the "peeling the onion"
 pattern: each parser returns its header info plus a slice pointing to the next
 layer's data.
@@ -1173,14 +1284,14 @@ type Statistics struct {
 
     totalPackets   uint64  // total frames captured
     totalBytes     uint64  // total bytes captured
-    droppedPackets uint64  // frames dropped due to full channel
+    droppedPackets uint64  // frames dropped (full channel or malformed)
 
     protocols      map[string]*ProtoStats  // per-protocol counters
 
     // bandwidth tracking
     intervalBytes uint64   // bytes accumulated since last GetSnapshot()
     lastTick      time.Time
-    currentBPS    float64  // bytes per second — computed in GetSnapshot()
+    currentBPS    float64  // bits per second - computed in GetSnapshot()
     peakBPS       float64  // highest BPS ever observed
     peakBPSAt     time.Time
 
@@ -1209,9 +1320,8 @@ ensures both updates happen atomically as a group.
 ```go
 func (s *Statistics) GetSnapshot() Snapshot {
     ...
-    elapsed := now.Sub(s.lastTick).Seconds()
-    if elapsed > 0 {
-        s.currentBPS = float64(s.intervalBytes) / elapsed
+    if elapsed := now.Sub(s.lastTick).Seconds(); elapsed > 0 {
+        s.currentBPS = float64(s.intervalBytes) * 8 / elapsed
     }
     s.intervalBytes = 0    // reset for next interval
     s.lastTick = now
@@ -1219,11 +1329,13 @@ func (s *Statistics) GetSnapshot() Snapshot {
 }
 ```
 
-**Bytes Per Second (BPS)** = total bytes in interval / duration of interval.
+**Bits Per Second (bps)** = bytes in interval × 8 / duration of interval.
+Network speeds are quoted in bits (a "100 Mbps" link), so the byte count is
+multiplied by 8 before it is displayed as Kbps/Mbps/Gbps.
 
 Called every second by the display ticker, so `elapsed ≈ 1.0` second. The
 `intervalBytes` counter resets on each call, so it only counts bytes from the
-most recent interval — giving a **current** (not cumulative) bandwidth reading.
+most recent interval - giving a **current** (not cumulative) bandwidth reading.
 
 #### Deep Copy in `GetSnapshot`
 
@@ -1236,7 +1348,7 @@ for k, v := range s.protocols {
 
 The display goroutine needs to read the protocol map **after** releasing the
 mutex. If we returned a reference to the internal map, the parse worker could
-modify it while the display goroutine is reading — a **data race**. Copying
+modify it while the display goroutine is reading - a **data race**. Copying
 creates an independent snapshot the display can read safely without holding any
 lock.
 
@@ -1261,46 +1373,66 @@ type FiveTuple struct {
 }
 ```
 
-Two packets belong to the same **flow** if they share the same five-tuple —
+Two packets belong to the same **flow** if they share the same five-tuple -
 regardless of direction. The `normalise` function ensures that
 `(A:1234 → B:80)` and `(B:80 → A:1234)` map to the same key by always putting
-the lexicographically smaller IP first.
+the lexicographically smaller IP first. It also reports whether it swapped the
+endpoints, which tells the tracker which side of the connection sent the
+packet.
 
 #### TCP State Machine
 
 ```
-[new connection: SYN seen]
+[new connection: SYN seen]        [first packet is not a SYN]
+         │                                   │
+         ▼                                   │
+      SYN_SENT                               │
+         │                                   │
+    SYN+ACK seen                             │
+         │                                   │
+         ▼                                   │
+    ESTABLISHED  ◄───────────────────────────┘
          │
-         ▼
-      SYN_SENT
-         │
-    SYN+ACK seen
-         │
-         ▼
-    ESTABLISHED
-         │
-      FIN seen
+      FIN seen (from either side)
          │
          ▼
       CLOSING
          │
-      FIN+ACK seen  or  RST seen
+      both sides sent FIN, then an ACK   (or RST seen in any state)
          │
          ▼
-       CLOSED  ──► deleted from map
+       CLOSED  ──► kept 10 s (not counted), then removed
 ```
+
+A flow whose first observed packet is not a SYN was already open when the
+capture started, so it begins as `ESTABLISHED`.
+
+A TCP close needs a FIN from **each** side. The tracker remembers which sides
+have sent one (`finSeen`), and only the ACK that follows the second FIN moves
+the flow to `CLOSED`.
 
 **RST (Reset)**: Immediately terminates a connection without the usual FIN
 handshake. Happens when: the receiving end has no process listening on that
 port, a firewall blocks the connection, or an application crashes.
 
-Flows in `CLOSED` state are deleted immediately:
-```go
-if flow.State == "CLOSED" {
-    delete(ft.flows, key)
-}
-```
-This bounds the memory usage of the flow map — otherwise it would grow forever.
+Closed flows are not deleted on the spot. Stray packets often trail a close
+(a late ACK, a retransmission), and if the entry were already gone each one
+would be mistaken for a brand new connection. So the entry lingers for 10
+seconds, is ignored by `ActiveCount()`, and absorbs those stragglers. This
+mirrors TCP's own TIME_WAIT state. A fresh SYN on a closed entry starts a new
+flow (the port pair is being reused).
+
+Many connections never close cleanly from the sniffer's point of view (the
+capture missed the FIN, the peer vanished). `Expire()`, called on every
+snapshot, removes entries that have been idle too long:
+
+| State | Idle limit |
+|---|---|
+| `ESTABLISHED` | 5 minutes |
+| `SYN_SENT`, `CLOSING` | 30 seconds |
+| `CLOSED` | 10 seconds |
+
+This bounds the memory usage of the flow map - otherwise it would grow forever.
 
 ---
 
@@ -1331,10 +1463,15 @@ if len(talkers) > t.n {
 ```
 
 This is acceptable because sorting happens at display frequency (1 Hz), not at
-packet frequency (potentially millions/second).
+packet frequency (potentially millions/second). Equal byte counts are ordered
+by IP address so the ranking does not shuffle between refreshes.
+
+**Bounded memory**: the map is capped at 65,536 addresses. A port scan or a
+flood with spoofed sources can produce a new source IP on every packet; when
+the cap is hit, `prune()` keeps the heaviest half and discards the rest.
 
 **Alternative approach** (not used): A min-heap of size N would keep the top N
-in O(log N) per packet — better if N is large or packet rate is extremely high.
+in O(log N) per packet - better if N is large or packet rate is extremely high.
 For N=10 and a 1 Hz display, the sort approach is simpler and fast enough.
 
 ---
@@ -1346,14 +1483,14 @@ For N=10 and a 1 Hz display, the sort approach is simpler and fast enough.
 #### ANSI Escape Sequences
 
 ```
-\033[0m   — Reset all attributes
-\033[1m   — Bold
-\033[31m  — Red foreground
-\033[32m  — Green foreground
-\033[33m  — Yellow foreground
-\033[34m  — Blue foreground
-\033[36m  — Cyan foreground
-\033[90m  — Dark gray (bright black)
+\033[0m   - Reset all attributes
+\033[1m   - Bold
+\033[31m  - Red foreground
+\033[32m  - Green foreground
+\033[33m  - Yellow foreground
+\033[34m  - Blue foreground
+\033[36m  - Cyan foreground
+\033[90m  - Dark gray (bright black)
 ```
 
 `\033` is the ESC character (ASCII 27, hexadecimal 0x1B). The format is:
@@ -1384,23 +1521,37 @@ Most terminal UIs use a library (ncurses, bubbletea, termbox). This project
 uses a simpler technique:
 
 ```go
-func ClearScreen() {
-    fmt.Print("\033[H\033[2J")
-}
+const clearScreen = "\033[H\033[2J"
 ```
 
-- `\033[H` = move cursor to position (1,1) — top-left of terminal.
+- `\033[H` = move cursor to position (1,1) - top-left of terminal.
 - `\033[2J` = erase the entire screen.
 
 On every tick (1 Hz), the dashboard is completely redrawn from scratch. The
 cursor jumps to the top-left and the screen is cleared before printing. This
 creates the illusion of an updating UI without a real TUI framework.
 
+`PrintStats` builds the whole screen in a `strings.Builder` and writes it to
+stdout in one call. Printing line by line would let the terminal show
+half-drawn frames, which looks like flicker.
+
+#### Keeping the Box Aligned
+
+Every row must be exactly 80 columns wide between the borders. The catch is
+that a colored string is longer in bytes than it is on screen:
+`"\033[32m42\033[0m"` is 11 bytes but only 2 visible characters, so
+`fmt.Sprintf("%-10s", ...)` pads it wrongly. `visibleWidth()` counts columns
+while skipping escape sequences, and `row()` uses it to compute the padding:
+
+```go
+pad := innerWidth - indent - visibleWidth(content)
+```
+
 #### Progress Bar
 
 ```go
 func progressBar(pct float64, width int) string {
-    filled := int(pct / 100 * float64(width))
+    filled := int(pct / 100 * float64(width))   // clamped to [0, width]
     bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
     return Colorize(ColorGreen, bar)
 }
@@ -1409,7 +1560,7 @@ func progressBar(pct float64, width int) string {
 `█` (U+2588 FULL BLOCK) for filled cells; `░` (U+2591 LIGHT SHADE) for empty
 cells. A 20-wide bar for 75% traffic would be: `███████████████░░░░░`.
 
-#### `formatBytes` — Human-Readable Sizes
+#### `formatBytes` - Human-Readable Sizes
 
 ```go
 func formatBytes(b uint64) string {
@@ -1423,10 +1574,10 @@ func formatBytes(b uint64) string {
 ```
 
 `1<<30` = 2^30 = 1,073,741,824 (1 gibibyte). Using bit-shifts is idiomatic for
-powers of two — faster to read than `1073741824` and more precise than `1e9`
+powers of two - faster to read than `1073741824` and more precise than `1e9`
 (which is a decimal billion, not a binary gibibyte).
 
-#### `formatBPS` — Human-Readable Bandwidth
+#### `formatBPS` - Human-Readable Bandwidth
 
 ```go
 case bps >= 1e9: return fmt.Sprintf("%.1f Gbps", bps/1e9)
@@ -1450,25 +1601,26 @@ and tcpdump.
 A `.pcap` file has a simple layout:
 
 ```
-[Global Header — 24 bytes]
-[Packet Record 1 Header — 16 bytes][Packet 1 raw bytes]
-[Packet Record 2 Header — 16 bytes][Packet 2 raw bytes]
+[Global Header - 24 bytes]
+[Packet Record 1 Header - 16 bytes][Packet 1 raw bytes]
+[Packet Record 2 Header - 16 bytes][Packet 2 raw bytes]
 ...
 ```
 
 #### Global Header (24 bytes)
 
-```go
-hdr := struct {
-    Magic        uint32   // 0xA1B2C3D4 — identifies this as a pcap file
-    VersionMajor uint16   // 2
-    VersionMinor uint16   // 4
-    ThisZone     int32    // UTC offset in seconds (always 0 — use UTC)
-    SigFigs      uint32   // timestamp precision (always 0)
-    SnapLen      uint32   // max bytes per packet saved (65535)
-    Network      uint32   // link-layer type (1 = Ethernet)
-}
 ```
+Bytes 0–3  : Magic         0xA1B2C3D4 - identifies this as a pcap file
+Bytes 4–5  : VersionMajor  2
+Bytes 6–7  : VersionMinor  4
+Bytes 8–11 : ThisZone      UTC offset in seconds (always 0 - use UTC)
+Bytes 12–15: SigFigs       timestamp precision (always 0)
+Bytes 16–19: SnapLen       max bytes per packet saved (65535)
+Bytes 20–23: Network       link-layer type (1 = Ethernet)
+```
+
+The writer fills a 24-byte array field by field with
+`binary.LittleEndian.PutUint32` / `PutUint16` and writes it in one go.
 
 **Magic Number** `0xA1B2C3D4`: A fixed byte sequence at the start of a file
 that identifies its format. Wireshark reads this to know: "this is a pcap file,
@@ -1490,12 +1642,17 @@ SLL (cooked capture).
 // ts_usec:  timestamp microseconds
 // incl_len: number of bytes actually saved (≤ snapLen)
 // orig_len: original length of the packet (before any truncation)
-tsSec  := uint32(ts.Unix())
-tsUsec := uint32(ts.Nanosecond() / 1000)  // nanoseconds → microseconds
+binary.LittleEndian.PutUint32(w.hdr[0:4], uint32(ts.Unix()))
+binary.LittleEndian.PutUint32(w.hdr[4:8], uint32(ts.Nanosecond()/1000)) // ns → µs
+binary.LittleEndian.PutUint32(w.hdr[8:12], capLen)
+binary.LittleEndian.PutUint32(w.hdr[12:16], origLen)
 ```
 
+`w.hdr` is a 16-byte array that lives inside the `Writer` and is reused for
+every packet, so writing a record header allocates nothing.
+
 `ts.Unix()` returns seconds since the Unix epoch (January 1, 1970). The pcap
-format stores timestamps as (seconds, microseconds) — a pair of 32-bit
+format stores timestamps as (seconds, microseconds) - a pair of 32-bit
 integers.
 
 #### Buffered Writing
@@ -1508,19 +1665,18 @@ w := &Writer{f: f, buf: bufio.NewWriterSize(f, 1<<20)}
 buffer. Without buffering, each `WritePacket` call would issue a system call to
 write 16 + N bytes to disk. System calls are expensive (context switch to
 kernel and back). With buffering, writes accumulate in memory and are flushed to
-disk in large chunks — dramatically improving throughput at high packet rates.
+disk in large chunks - dramatically improving throughput at high packet rates.
 
 ```go
 func (w *Writer) Close() error {
-    if err := w.buf.Flush(); err != nil {  // flush remaining buffer to disk
-        return err
-    }
-    return w.f.Close()
+    return errors.Join(w.buf.Flush(), w.f.Close())
 }
 ```
 
-`Flush()` must be called before `Close()` — otherwise the last partial buffer
-(up to 1 MB) would be lost.
+`Flush()` must be called before `Close()` - otherwise the last partial buffer
+(up to 1 MB) would be lost. Both calls always run, even if the flush fails, so
+the file descriptor is never leaked; `errors.Join` returns `nil` when both
+succeed and otherwise reports whichever failed.
 
 ---
 
@@ -1585,7 +1741,7 @@ Value = 195 × 256 + 80 = 49920 + 80 = 50000
 
 **DF flag (Don't Fragment)**: `0x40, 0x00` at bytes 6–7 of the IPv4 header.
 The top 3 bits of byte 6 are IP flags: bit 1 is DF. `0x40 = 0100 0000`, so
-bit 6 (DF) is set. This means the packet must not be fragmented — if it is too
+bit 6 (DF) is set. This means the packet must not be fragmented - if it is too
 large for a router, drop it and send ICMP "Fragmentation Needed" back.
 
 ---
@@ -1606,25 +1762,26 @@ go func() {
 
 This project has three goroutines after startup:
 1. **Capture goroutine**: Blocked on `Recvfrom` waiting for network packets.
-2. **Parse worker**: Blocked on `for frame := range packetChan`.
+2. **Parse worker**: Blocked on `for frame := range frames`.
 3. **Display goroutine**: Blocked on `ticker.C` (1-second timer).
 
-The main goroutine is blocked on `<-sigCh` waiting for Ctrl+C.
+The main goroutine is blocked in a `select`, waiting for Ctrl+C (`sigCh`) or
+for the capture loop to fail (`captureErr`).
 
 ### Channels
 
-Channels are Go's primary mechanism for goroutine communication — they pass
+Channels are Go's primary mechanism for goroutine communication - they pass
 data safely between goroutines.
 
 ```go
-packetChan := make(chan []byte, 4096)
+frames := make(chan capture.Frame, 4096)
 ```
 
 This is a **buffered channel** with capacity 4096. Think of it as a queue:
-- The capture goroutine **sends**: `packetChan <- frame`
-- The parse worker **receives**: `for frame := range packetChan`
+- The capture goroutine **sends**: `frames <- Frame{...}`
+- The parse worker **receives**: `for frame := range frames`
 - If the queue is full (4096 frames waiting), the non-blocking send drops the
-  frame.
+  frame and the drop is counted.
 
 **Why 4096?** It absorbs bursts. If packets arrive in a burst of 4096 while the
 parse worker is momentarily busy, they queue up rather than being dropped.
@@ -1652,14 +1809,15 @@ cleanup before the program exits.
 2. OS sends SIGINT to process
 3. signal.Notify puts SIGINT into sigCh
 4. main goroutine reads from sigCh, unblocks
-5. close(done) — broadcasts shutdown signal
-6. capture.Close(fd) — closes socket, unblocks Recvfrom
-7. CaptureLoop returns, closes packetChan
-8. Parse worker's "range packetChan" loop ends (channel closed = no more items)
+5. close(done) - broadcasts shutdown signal
+6. Recvfrom returns (new packet or 200 ms timeout); CaptureLoop sees done
+7. CaptureLoop returns, the capture goroutine closes the frames channel
+8. Parse worker's "range frames" loop ends (channel closed = no more items)
 9. Display goroutine receives from done channel, returns
-10. wg.Wait() returns — all goroutines done
-11. pcapWriter.Close() — flush and close the .pcap file
-12. Print final summary, program exits
+10. wg.Wait() returns - all goroutines done
+11. pcapWriter.Close() - flush and close the .pcap file
+12. Print final summary
+13. Deferred capture.Close(fd) releases the socket, program exits
 ```
 
 This sequence ensures no data is lost and all resources are properly released.
@@ -1672,14 +1830,14 @@ This sequence ensures no data is lost and all resources are properly released.
 
 Go is a garbage-collected language. The runtime automatically frees memory
 when objects are no longer referenced. However, creating millions of short-lived
-objects per second causes **GC pressure** — frequent garbage collection pauses
+objects per second causes **GC pressure** - frequent garbage collection pauses
 that affect latency.
 
 ### `sync.Pool` Pattern
 
 ```go
 var packetPool = sync.Pool{
-    New: func() any { return &models.PacketInfo{} },
+    New: func() any { return new(models.PacketInfo) },
 }
 ```
 
@@ -1692,7 +1850,7 @@ After processing, calls `PutPacketInfo()` (returns it to pool). GC pressure
 near-zero because objects are reused.
 
 **Important**: The pool may discard objects at any time (e.g. during GC). This
-is fine — the `New` function creates a replacement. The pool is a best-effort
+is fine - the `New` function creates a replacement. The pool is a best-effort
 optimisation, not a hard guarantee of reuse.
 
 ### Ring Buffer Memory
@@ -1705,7 +1863,7 @@ slots: make([][]byte, capacity)
 
 Each slot holds a `[]byte` slice header (24 bytes: pointer + length + capacity).
 The actual packet bytes are stored in separate allocations (returned by the
-capture loop's `make([]byte, bytesRead)`).
+capture loop's `make([]byte, n)`).
 
 Setting `rb.slots[readIdx&rb.mask] = nil` in `Dequeue` releases the reference
 to the packet bytes, allowing the GC to reclaim them.
@@ -1755,13 +1913,13 @@ Payload: data[EthernetHeaderSize:]
 
 `data[14:]` does not copy any bytes. It creates a new slice **header**
 (pointer, length, capacity) pointing into the same underlying memory. This is
-Go's zero-copy slicing — no bytes are duplicated when we "strip" a header.
+Go's zero-copy slicing - no bytes are duplicated when we "strip" a header.
 
 The parse chain:
 ```
 raw      → data[0:N]     (full frame)
-eth.Payload → data[14:N]  (IP packet — same memory, new slice header)
-ip.Payload  → data[34:N]  (TCP segment — same memory, new slice header)
+eth.Payload → data[14:N]  (IP packet - same memory, new slice header)
+ip.Payload  → data[34:N]  (TCP segment - same memory, new slice header)
 tcp.Payload → data[54:N]  (application data)
 ```
 
@@ -1773,83 +1931,83 @@ All four slices point into the same original byte array. No copies.
 
 | Term | Full Form / Meaning |
 |---|---|
-| `ACK` | ACKnowledgment — TCP flag indicating the AckNum field is valid |
-| `AF_PACKET` | Address Family PACKET — Linux socket domain for raw Ethernet frames |
-| `AF_INET` | Address Family INternet — the standard IP socket domain |
-| `ARP` | Address Resolution Protocol — maps IP addresses to MAC addresses |
-| `BPS` | Bytes Per Second — bandwidth measurement |
-| `BPF` | Berkeley Packet Filter — kernel-level packet filtering virtual machine |
-| `buf` | buffer — temporary byte storage |
-| `CAP_NET_RAW` | Linux capability: NET RAW — permission to create raw sockets |
-| `chan` | channel — Go's typed pipe for goroutine communication |
+| `ACK` | ACKnowledgment - TCP flag indicating the AckNum field is valid |
+| `AF_PACKET` | Address Family PACKET - Linux socket domain for raw Ethernet frames |
+| `AF_INET` | Address Family INternet - the standard IP socket domain |
+| `ARP` | Address Resolution Protocol - maps IP addresses to MAC addresses |
+| `BPS` | Bits Per Second - bandwidth measurement |
+| `BPF` | Berkeley Packet Filter - kernel-level packet filtering virtual machine |
+| `buf` | buffer - temporary byte storage |
+| `CAP_NET_RAW` | Linux capability: NET RAW - permission to create raw sockets |
+| `chan` | channel - Go's typed pipe for goroutine communication |
 | `CLOSED` | TCP connection state: fully terminated |
-| `CLOSING` | TCP connection state: FIN sent, waiting for final ACK |
-| `CGO_ENABLED=0` | Disable C Go — build a pure-Go binary with no C library dependencies |
-| `DMA` | Direct Memory Access — hardware transfers data to RAM without CPU involvement |
-| `DSCP` | Differentiated Services Code Point — IP QoS priority field |
+| `CLOSING` | TCP connection state: at least one side has sent FIN |
+| `CGO_ENABLED=0` | Disable C Go - build a pure-Go binary with no C library dependencies |
+| `DMA` | Direct Memory Access - hardware transfers data to RAM without CPU involvement |
+| `DSCP` | Differentiated Services Code Point - IP QoS priority field |
 | `DstIP` | Destination IP address |
 | `DstMAC` | Destination MAC address |
 | `DstPort` | Destination port number |
-| `ECN` | Explicit Congestion Notification — IP flag for congestion signalling |
-| `eBPF` | extended Berkeley Packet Filter — modern programmable kernel subsystem |
-| `ETH_P_ALL` | EtherType Protocol ALL — receive all frame types |
+| `ECN` | Explicit Congestion Notification - IP flag for congestion signalling |
+| `eBPF` | extended Berkeley Packet Filter - modern programmable kernel subsystem |
+| `ETH_P_ALL` | EtherType Protocol ALL - receive all frame types |
 | `EtherType` | 2-byte field in Ethernet header identifying the next-layer protocol |
-| `fd` | file descriptor — integer handle for an open kernel resource (socket, file, etc.) |
-| `FIN` | FINish — TCP flag: sender has no more data |
+| `fd` | file descriptor - integer handle for an open kernel resource (socket, file, etc.) |
+| `FIN` | FINish - TCP flag: sender has no more data |
 | `fps` | frames per second |
-| `GC` | Garbage Collector — automatic memory reclamation in Go |
-| `htons` | Host TO Network Short — convert uint16 from host to big-endian byte order |
-| `HTTP` | HyperText Transfer Protocol — layer 7 web protocol |
-| `HTTPS` | HTTP Secure — HTTP over TLS/SSL |
-| `IANA` | Internet Assigned Numbers Authority — assigns protocol numbers, ports |
-| `ICMP` | Internet Control Message Protocol — network diagnostics and error reporting |
-| `IHL` | Internet Header Length — IPv4 header length in 32-bit words |
-| `iface` | interface — network interface name (eth0, wlan0, etc.) |
-| `Ifindex` | Interface Index — kernel's integer ID for a NIC |
-| `insns` | instructions — slice of BPF bytecode instructions |
-| `IP` | Internet Protocol — layer 3 addressing and routing |
-| `IPv4` | Internet Protocol version 4 — 32-bit addresses |
-| `IPv6` | Internet Protocol version 6 — 128-bit addresses |
-| `ldflags` | linker flags — options passed to the Go linker at build time |
-| `MAC` | Media Access Control — 6-byte hardware address |
-| `mreq` | Membership REQuest — kernel structure for socket membership operations |
-| `MTU` | Maximum Transmission Unit — largest frame a network link will carry (usually 1500 bytes for Ethernet) |
-| `mu` | MUtex — short name convention for sync.Mutex fields |
-| `NIC` | Network Interface Card — hardware that connects a computer to a network |
-| `NTP` | Network Time Protocol — synchronises clocks over a network |
-| `OSI` | Open Systems Interconnection — 7-layer network model |
-| `pcap` | Packet CAPture — industry-standard file format for captured network traffic |
-| `pcapng` | Packet CAPture Next Generation — newer, more flexible version of pcap |
+| `GC` | Garbage Collector - automatic memory reclamation in Go |
+| `htons` | Host TO Network Short - convert uint16 from host to big-endian byte order |
+| `HTTP` | HyperText Transfer Protocol - layer 7 web protocol |
+| `HTTPS` | HTTP Secure - HTTP over TLS/SSL |
+| `IANA` | Internet Assigned Numbers Authority - assigns protocol numbers, ports |
+| `ICMP` | Internet Control Message Protocol - network diagnostics and error reporting |
+| `IHL` | Internet Header Length - IPv4 header length in 32-bit words |
+| `iface` | interface - network interface name (eth0, wlan0, etc.) |
+| `Ifindex` | Interface Index - kernel's integer ID for a NIC |
+| `insns` | instructions - slice of BPF bytecode instructions |
+| `IP` | Internet Protocol - layer 3 addressing and routing |
+| `IPv4` | Internet Protocol version 4 - 32-bit addresses |
+| `IPv6` | Internet Protocol version 6 - 128-bit addresses |
+| `ldflags` | linker flags - options passed to the Go linker at build time |
+| `MAC` | Media Access Control - 6-byte hardware address |
+| `mreq` | Membership REQuest - kernel structure for socket membership operations |
+| `MTU` | Maximum Transmission Unit - largest frame a network link will carry (usually 1500 bytes for Ethernet) |
+| `mu` | MUtex - short name convention for sync.Mutex fields |
+| `NIC` | Network Interface Card - hardware that connects a computer to a network |
+| `NTP` | Network Time Protocol - synchronises clocks over a network |
+| `OSI` | Open Systems Interconnection - 7-layer network model |
+| `pcap` | Packet CAPture - industry-standard file format for captured network traffic |
+| `pcapng` | Packet CAPture Next Generation - newer, more flexible version of pcap |
 | `pct` | percentage |
-| `PeakBPS` | Peak Bytes Per Second — highest bandwidth ever recorded |
-| `PSH` | PuSH — TCP flag: deliver buffered data to application immediately |
+| `PeakBPS` | Peak Bits Per Second - highest bandwidth ever recorded |
+| `PSH` | PuSH - TCP flag: deliver buffered data to application immediately |
 | `proto` | protocol |
-| `RFC` | Request For Comments — IETF standards documents that define protocols |
-| `RST` | ReSeT — TCP flag: immediately abort connection |
-| `SigFigs` | SIGnificant FIGures — pcap timestamp precision (always 0) |
-| `SIGINT` | SIGnal INTerrupt — OS signal from Ctrl+C |
-| `SIGTERM` | SIGnal TERMinate — OS signal from `kill <pid>` or Docker stop |
-| `SnapLen` | SNAPshot LENgth — maximum bytes captured per packet |
-| `SOCK_RAW` | SOCKET RAW — socket type that bypasses protocol processing |
-| `SOL_PACKET` | Socket Option Level PACKET — option level for AF_PACKET sockets |
-| `SOL_SOCKET` | Socket Option Level SOCKET — option level for generic socket options |
-| `SO_ATTACH_FILTER` | Socket Option ATTACH FILTER — installs a BPF program on a socket |
-| `SPSC` | Single-Producer Single-Consumer — lock-free buffer design constraint |
+| `RFC` | Request For Comments - IETF standards documents that define protocols |
+| `RST` | ReSeT - TCP flag: immediately abort connection |
+| `SigFigs` | SIGnificant FIGures - pcap timestamp precision (always 0) |
+| `SIGINT` | SIGnal INTerrupt - OS signal from Ctrl+C |
+| `SIGTERM` | SIGnal TERMinate - OS signal from `kill <pid>` or Docker stop |
+| `SnapLen` | SNAPshot LENgth - maximum bytes captured per packet |
+| `SOCK_RAW` | SOCKET RAW - socket type that bypasses protocol processing |
+| `SOL_PACKET` | Socket Option Level PACKET - option level for AF_PACKET sockets |
+| `SOL_SOCKET` | Socket Option Level SOCKET - option level for generic socket options |
+| `SO_ATTACH_FILTER` | Socket Option ATTACH FILTER - installs a BPF program on a socket |
+| `SPSC` | Single-Producer Single-Consumer - lock-free buffer design constraint |
 | `SrcIP` | Source IP address |
 | `SrcMAC` | Source MAC address |
 | `SrcPort` | Source port number |
-| `SYN` | SYNchronize — TCP flag: begin connection handshake |
+| `SYN` | SYNchronize - TCP flag: begin connection handshake |
 | `SYN_SENT` | TCP connection state: SYN sent, waiting for SYN+ACK |
-| `TCP` | Transmission Control Protocol — reliable, ordered, connection-oriented transport |
-| `TLS` | Transport Layer Security — encryption protocol (formerly SSL) |
+| `TCP` | Transmission Control Protocol - reliable, ordered, connection-oriented transport |
+| `TLS` | Transport Layer Security - encryption protocol (formerly SSL) |
 | `ts` | timestamp |
-| `TTL` | Time To Live — decremented at each router hop; packet dropped when 0 |
-| `TUI` | Terminal User Interface — text-based interactive UI |
-| `UDP` | User Datagram Protocol — lightweight, connectionless transport |
-| `URG` | URGent — TCP flag: urgent pointer field contains valid data |
-| `wg` | WaitGroup — short name convention for sync.WaitGroup variables |
-| `WAN` | Wide Area Network — network spanning large geographic areas (the Internet) |
-| `LAN` | Local Area Network — network within a building or campus |
+| `TTL` | Time To Live - decremented at each router hop; packet dropped when 0 |
+| `TUI` | Terminal User Interface - text-based interactive UI |
+| `UDP` | User Datagram Protocol - lightweight, connectionless transport |
+| `URG` | URGent - TCP flag: urgent pointer field contains valid data |
+| `wg` | WaitGroup - short name convention for sync.WaitGroup variables |
+| `WAN` | Wide Area Network - network spanning large geographic areas (the Internet) |
+| `LAN` | Local Area Network - network within a building or campus |
 
 ---
 
@@ -1890,7 +2048,7 @@ sudo ./bin/gopacketsniffer -i eth0 -w capture.pcap
 make test   # go test -v -race ./...
 ```
 
-The `-race` flag enables Go's **race detector** — a runtime tool that detects
+The `-race` flag enables Go's **race detector** - a runtime tool that detects
 concurrent access to shared data without synchronisation. It instruments all
 memory accesses with checks. Any data race causes the test to fail with a
 detailed report.
@@ -1900,7 +2058,7 @@ make bench   # go test -bench=. -benchmem ./internal/...
 ```
 
 Benchmarks measure operations per second and allocations per operation. The
-`-benchmem` flag shows memory allocations — crucial for validating that
+`-benchmem` flag shows memory allocations - crucial for validating that
 `sync.Pool` reduces allocations.
 
 ```bash
@@ -1914,7 +2072,9 @@ Coverage measures what percentage of code paths are exercised by tests.
 ```dockerfile
 # Stage 1: Build (in a Go-equipped image)
 FROM golang:1.25-alpine AS builder
-RUN CGO_ENABLED=0 go build -o gopacketsniffer ./cmd/gopacketsniffer
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-w -s -X main.version=${VERSION}" \
+    -o gopacketsniffer ./cmd/gopacketsniffer
 
 # Stage 2: Run (minimal image, no Go toolchain)
 FROM alpine:3.20
@@ -1977,37 +2137,42 @@ The Ethernet frame arrives at the NIC and is copied to kernel memory.
 
 The BPF program (compiled from `"tcp port 80"`) runs in the kernel:
 ```
-Instruction 0: Load byte at offset 23 (IP protocol) → value = 6 (TCP) ✓
-Instruction 1: 6 == 6? Yes → skip 0 instructions
-Instruction 2: Load 2 bytes at offset 34 (TCP src port) → 49152
-Instruction 3: 49152 == 80? No → skip 0 instructions
-Instruction 4: Load 2 bytes at offset 36 (TCP dst port) → 80
-Instruction 5: 80 == 80? Yes → skip 0 instructions
-Instruction 6: Return 0xFFFF → ACCEPT
+Instruction  0: Load 2 bytes at offset 12 (EtherType) → 0x0800
+Instruction  1: 0x0800 == 0x0800? Yes → continue
+Instruction  2: Load byte at offset 23 (IP protocol) → 6 (TCP)
+Instruction  3: 6 == 6? Yes → continue
+Instruction  4: Load 2 bytes at offset 20 (flags + fragment offset) → 0x4000
+Instruction  5: 0x4000 & 0x1fff != 0? No (not a later fragment) → continue
+Instruction  6: X = 4 * (0x45 & 0x0f) = 20 (IP header length)
+Instruction  7: Load 2 bytes at offset 20+14 = 34 (TCP src port) → 49152
+Instruction  8: 49152 == 80? No → continue
+Instruction  9: Load 2 bytes at offset 20+16 = 36 (TCP dst port) → 80
+Instruction 10: 80 == 80? Yes → continue
+Instruction 11: Return 262144 → ACCEPT
 ```
 The packet is accepted and copied to userspace.
 
 ### Step 3: `CaptureLoop` (Goroutine 1)
 
-`unix.Recvfrom` unblocks. `bytesRead = 74` (14 Ethernet + 20 IP + 20 TCP + 20
-HTTP data).
+`unix.Recvfrom` unblocks. `n = 74` (14 Ethernet + 20 IP + 40 TCP: a SYN
+carries 20 bytes of TCP options and no data).
 
 ```go
-frame := make([]byte, 74)
-copy(frame, buf[:74])
-packetChan <- frame    // enqueue in the buffered channel
+ts := time.Now()
+data := make([]byte, 74)
+copy(data, buf[:74])
+frames <- Frame{Data: data, Timestamp: ts}    // enqueue in the buffered channel
 ```
 
 ### Step 4: Parse Worker (Goroutine 2)
 
 ```go
-for frame := range packetChan {
-    ts := time.Now()
-    
+for frame := range frames {
     // PCAP write (if -w flag)
-    pcapWriter.WritePacket(ts, frame)
-    
-    info, err := parser.DecodePacket(frame, ts)
+    pcapWriter.WritePacket(frame.Timestamp, frame.Data)
+
+    // processFrame:
+    info, err := parser.DecodePacket(frame.Data, frame.Timestamp)
 ```
 
 **Inside `DecodePacket`**:
@@ -2039,7 +2204,7 @@ tcp.SeqNum = 1234567890
 tcp.AckNum = 0
 tcp.Flags = 0x02 (SYN)
 tcp.FlagsStr = "[SYN]"
-tcp.Payload = frame[54:]           // the HTTP data (empty for SYN)
+tcp.Payload = frame[74:]           // after the 40-byte TCP header: empty for SYN
 
 // tcp.Payload is empty for this SYN packet, no HTTP parsing
 
@@ -2075,15 +2240,15 @@ One second later, the ticker fires:
 
 ```go
 snap := metrics.GetSnapshot()
-display.PrintStats("eth0", snap)
+display.PrintStats("eth0", version, snap)
 ```
 
 The dashboard shows:
 ```
-│  TCP    1 pkts (100.0%) │  74  B    ████████████████████  │
-│  TOP TALKERS
-│  1. 192.168.1.100       74  B   (100.0%)
-│  Active TCP Flows: 1
+│  TCP           1 pkts (100.0%) |     74  B  ████████████████████
+│  TOP TALKERS (by bytes sent)
+│   1. 192.168.1.100       74  B  (100.0%)
+│  Active TCP flows: 1
 ```
 
 ### Step 6: Server Responds
@@ -2116,17 +2281,18 @@ metrics.RecordHTTP(false, 200)  // isRequest=false, statusCode=200
 The dashboard now shows:
 ```
 │  HTTP TRAFFIC
-│  Requests: 1  │  2xx: 1  4xx: 0  5xx: 0
+│  Requests: 1  |  Responses  2xx: 1  4xx: 0  5xx: 0
 ```
 
 ### Step 7: Connection Closes
 
 Browser sends FIN → flow state transitions to `CLOSING`.
-Server sends FIN+ACK → flow state transitions to `CLOSED` → entry deleted from
-flow map.
+Server sends its own FIN+ACK → both sides have now sent FIN.
+Browser sends the final ACK → flow state transitions to `CLOSED`. The entry
+stops counting as active and is removed from the flow map 10 seconds later.
 
 ```
-│  Active TCP Flows: 0
+│  Active TCP flows: 0
 ```
 
 ---
@@ -2135,24 +2301,24 @@ flow map.
 
 You have now read about:
 
-1. **What packet sniffing is** — intercepting frames at the network interface.
-2. **The OSI model** — how protocols stack like Russian dolls.
-3. **AF_PACKET sockets** — Linux's API for raw Ethernet capture.
-4. **Promiscuous mode** — receiving all frames, not just those addressed to you.
-5. **BPF filters** — kernel-level packet filtering before userspace involvement.
-6. **Ethernet II frames** — 14-byte headers with MAC addresses and EtherType.
-7. **IPv4 packets** — 20+ byte headers with IP addresses, TTL, and protocol.
-8. **TCP segments** — connection-oriented transport with sequence numbers, flags,
+1. **What packet sniffing is** - intercepting frames at the network interface.
+2. **The OSI model** - how protocols stack like Russian dolls.
+3. **AF_PACKET sockets** - Linux's API for raw Ethernet capture.
+4. **Promiscuous mode** - receiving all frames, not just those addressed to you.
+5. **BPF filters** - kernel-level packet filtering before userspace involvement.
+6. **Ethernet II frames** - 14-byte headers with MAC addresses and EtherType.
+7. **IPv4 packets** - 20+ byte headers with IP addresses, TTL, and protocol.
+8. **TCP segments** - connection-oriented transport with sequence numbers, flags,
    and flow control.
-9. **UDP datagrams** — lightweight connectionless transport.
-10. **ICMP packets** — network diagnostic and error messages.
-11. **HTTP/1.x detection** — best-effort layer 7 parsing.
-12. **Go goroutines and channels** — concurrent pipeline architecture.
-13. **sync.Mutex** — protecting shared state between goroutines.
-14. **sync.Pool** — reusing allocations to reduce GC pressure.
-15. **Ring buffers** — lock-free SPSC queues using atomic operations.
-16. **Binary parsing** — reading bytes with bit shifts and bigendian decoding.
-17. **The pcap file format** — saving frames for Wireshark analysis.
-18. **ANSI escape codes** — terminal colors and cursor control.
-19. **Multi-stage Docker builds** — small production images.
+9. **UDP datagrams** - lightweight connectionless transport.
+10. **ICMP packets** - network diagnostic and error messages.
+11. **HTTP/1.x detection** - best-effort layer 7 parsing.
+12. **Go goroutines and channels** - concurrent pipeline architecture.
+13. **sync.Mutex** - protecting shared state between goroutines.
+14. **sync.Pool** - reusing allocations to reduce GC pressure.
+15. **Ring buffers** - lock-free SPSC queues using atomic operations.
+16. **Binary parsing** - reading bytes with bit shifts and bigendian decoding.
+17. **The pcap file format** - saving frames for Wireshark analysis.
+18. **ANSI escape codes** - terminal colors and cursor control.
+19. **Multi-stage Docker builds** - small production images.
 20. **The complete lifecycle** of a single packet from NIC to dashboard.
